@@ -1,0 +1,35 @@
+{
+  "datasets": [
+    {
+      "benchmark": "LongMemEval cleaned (2025-09 release)",
+      "case_count": 6,
+      "dataset": "longmemeval_s_cleaned.json",
+      "dataset_hash": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+      "file": "benchmarks/samples/longmemeval_s_sample.json",
+      "kind": "qa",
+      "turn_count": 2956
+    },
+    {
+      "benchmark": "LongMemEval cleaned (2025-09 release)",
+      "case_count": 6,
+      "dataset": "longmemeval_oracle.json",
+      "dataset_hash": "821a2034d219ab45846873dd14c14f12cfe7776e73527a483f9dac095d38620c",
+      "file": "benchmarks/samples/longmemeval_oracle_sample.json",
+      "kind": "qa",
+      "turn_count": 106
+    },
+    {
+      "benchmark": "LoCoMo locomo10 (ACL 2024 release)",
+      "conversation": "conv-26",
+      "dataset": "locomo10.json",
+      "dataset_hash": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+      "file": "benchmarks/samples/locomo_sample.json",
+      "kind": "locomo",
+      "qa_count": 10,
+      "session_count": 19,
+      "turn_count": 419
+    }
+  ],
+  "note": "reader/judge fingerprints are recorded per run in the eval report; raw data lives in evals/benchmarks/data (not versioned)",
+  "schema_version": 1
+}

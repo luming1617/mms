@@ -1,0 +1,23 @@
+FROM python:3.13-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY pyproject.toml ./
+COPY src ./src
+COPY schema ./schema
+COPY contracts ./contracts
+COPY scripts ./scripts
+COPY tests ./tests
+COPY loadtests ./loadtests
+COPY quality ./quality
+COPY .gitleaks.toml ./
+
+# dev includes Ruff, mypy, pytest-cov, Bandit, pip-audit, diff-cover, Radon,
+# pytest-benchmark and the DeepEval evaluation dependencies.
+RUN pip install --no-cache-dir -e ".[dev]"
+
+CMD ["bash"]

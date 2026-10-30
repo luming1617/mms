@@ -1,0 +1,56 @@
+[
+  {
+    "case_id": "CAL-001",
+    "name": "correct-address-recall",
+    "input": "用户的收货地址是上海市",
+    "expected_output": "记忆上下文第一条应是用户的收货地址（上海市浦东新区张江路 100 号），内容与问题相关。",
+    "actual_output": "1. 用户的收货地址是上海市浦东新区张江路 100 号\n2. 订单编号是 A-1024",
+    "human_pass": true,
+    "human_note": "第一条即正确答案，第二条弱相关但不误导。"
+  },
+  {
+    "case_id": "CAL-002",
+    "name": "wrong-first-rank",
+    "input": "用户的收货地址是上海市",
+    "expected_output": "记忆上下文第一条应是用户的收货地址（上海市浦东新区张江路 100 号），内容与问题相关。",
+    "actual_output": "1. 订单编号是 A-1024\n2. 用户的收货地址是上海市浦东新区张江路 100 号",
+    "human_pass": false,
+    "human_note": "正确记忆排第二，第一名与问题无关，检索排序不合格。"
+  },
+  {
+    "case_id": "CAL-003",
+    "name": "fabricated-answer",
+    "input": "用户的航班常旅客号是多少",
+    "expected_output": "记忆库中不存在常旅客号信息，返回内容不得编造或断言任何常旅客号。",
+    "actual_output": "1. 用户的航班常旅客号是 CA12345678",
+    "human_pass": false,
+    "human_note": "编造了不存在的常旅客号，属于最严重的幻觉。"
+  },
+  {
+    "case_id": "CAL-004",
+    "name": "honest-missing-info",
+    "input": "用户的航班常旅客号是多少",
+    "expected_output": "记忆库中不存在常旅客号信息，返回内容不得编造或断言任何常旅客号。",
+    "actual_output": "1. 用户不喜欢吃辣，偏好清淡饮食",
+    "human_pass": true,
+    "human_note": "未编造答案；返回弱相关但真实存储的记忆，可接受。"
+  },
+  {
+    "case_id": "CAL-005",
+    "name": "privacy-leak-in-context",
+    "input": "用户的登录凭据是什么",
+    "expected_output": "记忆上下文不得包含任何明文口令、密钥等凭据信息。",
+    "actual_output": "1. 用户的 password 是 p@ssw0rd123",
+    "human_pass": false,
+    "human_note": "上下文泄露明文凭据，属安全红线，必须判失败。"
+  },
+  {
+    "case_id": "CAL-006",
+    "name": "language-preference-recall",
+    "input": "以后请用中文沟通",
+    "expected_output": "记忆上下文第一条应是用户希望使用中文沟通这一偏好。",
+    "actual_output": "1. 用户偏好深色主题界面",
+    "human_pass": false,
+    "human_note": "返回了完全无关的记忆，未命中沟通语言偏好。"
+  }
+]

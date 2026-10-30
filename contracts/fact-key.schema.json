@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mms.local/contracts/fact-key.schema.json",
+  "title": "Fact Key Registry Entry v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "fact_key",
+    "version",
+    "cardinality",
+    "allowed_source_kinds",
+    "sensitivity",
+    "auto_write",
+    "requires_authority",
+    "validator",
+    "mutual_exclusion",
+    "normalization_version",
+    "status",
+    "effective_from"
+  ],
+  "properties": {
+    "fact_key": {
+      "type": "string"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "cardinality": {
+      "enum": [
+        "SINGLE_VALUE",
+        "MULTI_VALUE",
+        "TEMPORAL"
+      ]
+    },
+    "authority_source": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "allowed_source_kinds": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "sensitivity": {
+      "enum": [
+        "LOW",
+        "MEDIUM",
+        "HIGH"
+      ]
+    },
+    "retention_days": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "auto_write": {
+      "type": "boolean"
+    },
+    "requires_authority": {
+      "type": "boolean"
+    },
+    "normalizer": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "validator": {
+      "type": "object"
+    },
+    "mutual_exclusion": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "semantic_template": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "normalization_version": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "DRAFT",
+        "ACTIVE",
+        "RETIRED"
+      ]
+    },
+    "effective_from": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

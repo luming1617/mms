@@ -1,0 +1,29 @@
+apiVersion: 1
+
+datasources:
+  - name: mms-prometheus
+    uid: mms-prom
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      timeInterval: 15s
+  - name: mms-tempo
+    uid: mms-tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+  - name: mms-loki
+    uid: mms-loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      derivedFields:
+        # JSON log field trace_id becomes a click-through link into the Tempo trace
+        # (docs/2 §1.1 Metrics -> Traces -> Logs triage flow).
+        - name: TraceID
+          matcherRegex: '"trace_id":"([0-9a-f]+)"'
+          url: "$${__value.raw}"
+          datasourceUid: mms-tempo

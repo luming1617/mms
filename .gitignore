@@ -1,0 +1,27 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.env
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.deepeval/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.benchmarks/
+mutants/
+.mutmut-cache
+build/
+dist/
+quality/reports/
+evals/benchmarks/data/
+
+# JetBrains IDEs (IntelliJ IDEA, PyCharm, WebStorm, etc.)
+.idea/
+*.iml
+*.ipr
+*.iws
+

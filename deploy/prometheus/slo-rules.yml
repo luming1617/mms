@@ -1,0 +1,40 @@
+groups:
+  - name: mms-slo-recording
+    interval: 30s
+    rules:
+      - record: mms:query_availability:ratio_rate5m
+        expr: |
+          1 - (
+            (sum(rate(mms_api_requests_total{purpose="query",code=~"5[0-9][0-9]|timeout"}[5m])) or vector(0))
+            / sum(rate(mms_api_requests_total{purpose="query"}[5m]))
+          )
+      - record: mms:query_availability:ratio_rate30d
+        expr: |
+          1 - (
+            (sum(rate(mms_api_requests_total{purpose="query",code=~"5[0-9][0-9]|timeout"}[30d])) or vector(0))
+            / sum(rate(mms_api_requests_total{purpose="query"}[30d]))
+          )
+      - record: mms:query_latency_seconds:p95_default
+        expr: histogram_quantile(0.95, sum by (le) (rate(mms_api_latency_seconds_bucket{path="default",route=~"/api/v1/memories/query|/api/v1/agent/memory-context"}[5m])))
+      - record: mms:query_latency_seconds:p99_default
+        expr: histogram_quantile(0.99, sum by (le) (rate(mms_api_latency_seconds_bucket{path="default",route=~"/api/v1/memories/query|/api/v1/agent/memory-context"}[5m])))
+      - record: mms:query_latency_seconds:p95_extended
+        expr: histogram_quantile(0.95, sum by (le) (rate(mms_api_latency_seconds_bucket{path="extended",route=~"/api/v1/memories/query|/api/v1/agent/memory-context"}[5m])))
+      - record: mms:query_latency_seconds:p99_extended
+        expr: histogram_quantile(0.99, sum by (le) (rate(mms_api_latency_seconds_bucket{path="extended",route=~"/api/v1/memories/query|/api/v1/agent/memory-context"}[5m])))
+      - record: mms:degraded:ratio_rate5m
+        expr: sum(rate(mms_retrieval_degraded_total[5m])) / sum(rate(mms_api_requests_total{purpose="query"}[5m]))
+      - record: mms:embedding_ready_age_seconds:p95
+        expr: histogram_quantile(0.95, sum by (le, view_kind, model) (rate(mms_embedding_ready_age_seconds_bucket{view_kind=~"ORIGINAL|CANONICAL"}[5m])))
+      - record: mms:embedding_ready_age_seconds:p99
+        expr: histogram_quantile(0.99, sum by (le, view_kind, model) (rate(mms_embedding_ready_age_seconds_bucket{view_kind=~"ORIGINAL|CANONICAL"}[5m])))
+      - record: mms:translation_ready_age_seconds:p95
+        expr: histogram_quantile(0.95, sum by (le, target_language) (rate(mms_translation_ready_age_seconds_bucket[5m])))
+      - record: mms:deletion_completion_seconds:p95
+        expr: histogram_quantile(0.95, sum by (le, scope) (rate(mms_deletion_completion_seconds_bucket[1h])))
+      - record: mms:extraction_parse_failure:ratio_rate1h
+        expr: |
+          sum(rate(mms_extraction_parse_failures_total[1h]))
+          / sum(rate(mms_candidates_total[1h]))
+      - record: mms:vector_search_latency_seconds:p95_exact
+        expr: histogram_quantile(0.95, sum by (le) (rate(mms_vector_search_latency_seconds_bucket{path="exact"}[5m])))

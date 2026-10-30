@@ -1,0 +1,423 @@
+# Processes that can execute a physical deletion need the independent audit-scrubber
+# account: the scrub runs on its own connection (docs 6.7.5), and SET LOCAL ROLE is refused
+# once the runtime accounts are separated (docs 12.3).
+x-scrubber-env: &scrubber-env
+  MMS_SCRUBBER_DATABASE_URL: postgresql://mms_audit_scrubber:scrub-dev-password@postgres:5432/mms
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: mms
+      POSTGRES_USER: mms
+      POSTGRES_PASSWORD: mms
+    ports:
+      - "5433:5432"
+    volumes:
+      - mms_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mms -d mms"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  init-db:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["python", "scripts/init_db.py"]
+    environment:
+      MMS_DATABASE_URL: postgresql://mms:mms@postgres:5432/mms
+      MMS_PROVISION_LOGIN_ROLES: "1"
+      MMS_APP_DB_PASSWORD: app-dev-password
+      MMS_WORKER_DB_PASSWORD: worker-dev-password
+      MMS_READONLY_DB_PASSWORD: ro-dev-password
+      MMS_SCRUBBER_DB_PASSWORD: scrub-dev-password
+      MMS_DELETION_DB_PASSWORD: deletion-dev-password
+    depends_on:
+      postgres:
+        condition: service_healthy
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["mms-api"]
+    environment:
+      MMS_DATABASE_URL: postgresql://mms_app:app-dev-password@postgres:5432/mms
+      <<: *scrubber-env
+      MMS_SERVICE_TOKEN: dev-token
+      MMS_EMBEDDING_PROVIDER: deterministic
+      MMS_SERVICE_NAME: mms-api
+      MMS_SERVICE_VERSION: 0.1.0
+      MMS_DEPLOYMENT_ENVIRONMENT: development
+      MMS_OTEL_ENDPOINT: http://otel-collector:4318/v1/traces
+      MMS_OTEL_SAMPLE_RATIO: "1.0"
+      MMS_LOG_LEVEL: INFO
+      MMS_LANGFUSE_PUBLIC_KEY: pk-lf-mms-dev-0000000000000000000000
+      MMS_LANGFUSE_SECRET_KEY: sk-lf-mms-dev-0000000000000000000000
+      MMS_LANGFUSE_BASE_URL: http://langfuse-web:3000
+      MMS_LANGFUSE_SAMPLE_RATIO: "1.0"
+    ports:
+      - "8000:8000"
+    depends_on:
+      init-db:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_started
+  worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["mms-worker"]
+    environment:
+      MMS_DATABASE_URL: postgresql://mms_worker:worker-dev-password@postgres:5432/mms
+      MMS_EMBEDDING_PROVIDER: deterministic
+      MMS_SERVICE_NAME: mms-embedding-worker
+      MMS_SERVICE_VERSION: 0.1.0
+      MMS_DEPLOYMENT_ENVIRONMENT: development
+      MMS_OTEL_ENDPOINT: http://otel-collector:4318/v1/traces
+      MMS_OTEL_SAMPLE_RATIO: "1.0"
+      MMS_LOG_LEVEL: INFO
+      MMS_LANGFUSE_PUBLIC_KEY: pk-lf-mms-dev-0000000000000000000000
+      MMS_LANGFUSE_SECRET_KEY: sk-lf-mms-dev-0000000000000000000000
+      MMS_LANGFUSE_BASE_URL: http://langfuse-web:3000
+      MMS_LANGFUSE_SAMPLE_RATIO: "1.0"
+      MMS_METRICS_EXPORT_PORT: "9101"
+    depends_on:
+      init-db:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_started
+  ingestion:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["mms-ingestion"]
+    environment:
+      MMS_DATABASE_URL: postgresql://mms_worker:worker-dev-password@postgres:5432/mms
+      MMS_EMBEDDING_PROVIDER: deterministic
+      MMS_SERVICE_NAME: mms-ingestion-worker
+      MMS_SERVICE_VERSION: 0.1.0
+      MMS_DEPLOYMENT_ENVIRONMENT: development
+      MMS_OTEL_ENDPOINT: http://otel-collector:4318/v1/traces
+      MMS_LOG_LEVEL: INFO
+      MMS_LANGFUSE_PUBLIC_KEY: pk-lf-mms-dev-0000000000000000000000
+      MMS_LANGFUSE_SECRET_KEY: sk-lf-mms-dev-0000000000000000000000
+      MMS_LANGFUSE_BASE_URL: http://langfuse-web:3000
+      MMS_METRICS_EXPORT_PORT: "9102"
+    depends_on:
+      init-db:
+        condition: service_completed_successfully
+  outbox:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["mms-outbox"]
+    environment:
+      MMS_DATABASE_URL: postgresql://mms_worker:worker-dev-password@postgres:5432/mms
+      MMS_SERVICE_NAME: mms-outbox-worker
+      MMS_SERVICE_VERSION: 0.1.0
+      MMS_DEPLOYMENT_ENVIRONMENT: development
+      MMS_OTEL_ENDPOINT: http://otel-collector:4318/v1/traces
+      MMS_LOG_LEVEL: INFO
+      MMS_LANGFUSE_PUBLIC_KEY: pk-lf-mms-dev-0000000000000000000000
+      MMS_LANGFUSE_SECRET_KEY: sk-lf-mms-dev-0000000000000000000000
+      MMS_LANGFUSE_BASE_URL: http://langfuse-web:3000
+      MMS_METRICS_EXPORT_PORT: "9103"
+    depends_on:
+      init-db:
+        condition: service_completed_successfully
+  lifecycle:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["mms-lifecycle"]
+    environment:
+      <<: *scrubber-env
+      MMS_DATABASE_URL: postgresql://mms_worker:worker-dev-password@postgres:5432/mms
+      # docs 8.3.3: the tombstone retention purge escalates to this account (docs 8.3.3).
+      MMS_DELETION_DATABASE_URL: postgresql://mms_deletion_worker:deletion-dev-password@postgres:5432/mms
+      MMS_SERVICE_NAME: mms-lifecycle-worker
+      MMS_SERVICE_VERSION: 0.1.0
+      MMS_DEPLOYMENT_ENVIRONMENT: development
+      MMS_OTEL_ENDPOINT: http://otel-collector:4318/v1/traces
+      MMS_LOG_LEVEL: INFO
+      MMS_LANGFUSE_PUBLIC_KEY: pk-lf-mms-dev-0000000000000000000000
+      MMS_LANGFUSE_SECRET_KEY: sk-lf-mms-dev-0000000000000000000000
+      MMS_LANGFUSE_BASE_URL: http://langfuse-web:3000
+      MMS_METRICS_EXPORT_PORT: "9104"
+    depends_on:
+      init-db:
+        condition: service_completed_successfully
+  translation:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["mms-translation"]
+    environment:
+      MMS_DATABASE_URL: postgresql://mms_worker:worker-dev-password@postgres:5432/mms
+      MMS_SERVICE_NAME: mms-translation-worker
+      MMS_SERVICE_VERSION: 0.1.0
+      MMS_DEPLOYMENT_ENVIRONMENT: development
+      MMS_OTEL_ENDPOINT: http://otel-collector:4318/v1/traces
+      MMS_LOG_LEVEL: INFO
+      MMS_LANGFUSE_PUBLIC_KEY: pk-lf-mms-dev-0000000000000000000000
+      MMS_LANGFUSE_SECRET_KEY: sk-lf-mms-dev-0000000000000000000000
+      MMS_LANGFUSE_BASE_URL: http://langfuse-web:3000
+      MMS_METRICS_EXPORT_PORT: "9105"
+    depends_on:
+      init-db:
+        condition: service_completed_successfully
+  view-cost:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["mms-view-cost"]
+    environment:
+      MMS_DATABASE_URL: postgresql://mms_worker:worker-dev-password@postgres:5432/mms
+      MMS_SERVICE_NAME: mms-view-cost-worker
+      MMS_SERVICE_VERSION: 0.1.0
+      MMS_DEPLOYMENT_ENVIRONMENT: development
+      MMS_OTEL_ENDPOINT: http://otel-collector:4318/v1/traces
+      MMS_LOG_LEVEL: INFO
+      MMS_LANGFUSE_PUBLIC_KEY: pk-lf-mms-dev-0000000000000000000000
+      MMS_LANGFUSE_SECRET_KEY: sk-lf-mms-dev-0000000000000000000000
+      MMS_LANGFUSE_BASE_URL: http://langfuse-web:3000
+      MMS_METRICS_EXPORT_PORT: "9106"
+    depends_on:
+      init-db:
+        condition: service_completed_successfully
+  otel-collector:
+    # 0.116+ images ship a dynamically linked binary that this snap-docker/runc
+    # cannot exec; 0.111.0 is the last verified static build for this host.
+    image: otel/opentelemetry-collector:0.111.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ${MMS_DEPLOY_DIR:-../deploy}/otel/collector-config.yaml:/etc/otelcol/config.yaml:ro
+    environment:
+      OTLP_TRACES_ENDPOINT: tempo:4317
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    healthcheck:
+      test: ["CMD", "/otelcol", "--version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+  tempo:
+    image: grafana/tempo:2.6.0
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - ${MMS_DEPLOY_DIR:-../deploy}/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - mms_tempo:/var/tempo
+    ports:
+      - "3200:3200"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:3200/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+  loki:
+    image: grafana/loki:3.0.0
+    command: ["-config.file=/etc/loki/loki-config.yaml"]
+    volumes:
+      - ${MMS_DEPLOY_DIR:-../deploy}/loki/loki-config.yaml:/etc/loki/loki-config.yaml:ro
+      - mms_loki:/loki
+    ports:
+      - "3100:3100"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:3100/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+  promtail:
+    image: grafana/promtail:3.0.0
+    command: ["-config.file=/etc/promtail/promtail-config.yaml"]
+    volumes:
+      - ${MMS_DEPLOY_DIR:-../deploy}/loki/promtail-config.yaml:/etc/promtail/promtail-config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - mms_promtail_positions:/tmp
+    depends_on:
+      loki:
+        condition: service_started
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ${MMS_DEPLOY_DIR:-../deploy}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ${MMS_DEPLOY_DIR:-../deploy}/prometheus/alerts.yml:/etc/prometheus/rules/alerts.yml:ro
+      - ${MMS_DEPLOY_DIR:-../deploy}/prometheus/slo-rules.yml:/etc/prometheus/rules/slo-rules.yml:ro
+      - mms_prometheus:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      otel-collector:
+        condition: service_started
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ${MMS_DEPLOY_DIR:-../deploy}/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "9093:9093"
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: mms-grafana
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    volumes:
+      - ${MMS_DEPLOY_DIR:-../deploy}/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ${MMS_DEPLOY_DIR:-../deploy}/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - mms_grafana:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+      tempo:
+        condition: service_started
+      loki:
+        condition: service_started
+  langfuse-postgres:
+    image: postgres:16-alpine
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - mms_langfuse_postgres:/var/lib/postgresql/data
+  langfuse-clickhouse:
+    image: clickhouse/clickhouse-server:24.3.13
+    restart: always
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+    volumes:
+      - mms_langfuse_clickhouse_data:/var/lib/clickhouse
+      - mms_langfuse_clickhouse_logs:/var/log/clickhouse-server
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+  langfuse-minio:
+    # cgr.dev requires no auth; the entrypoint pre-creates the langfuse bucket.
+    image: cgr.dev/chainguard/minio:latest
+    restart: always
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: miniosecret
+    volumes:
+      - mms_langfuse_minio:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+  langfuse-redis:
+    image: redis:7
+    restart: always
+    command: >
+      --requirepass myredissecret
+      --maxmemory-policy noeviction
+    volumes:
+      - mms_langfuse_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3.225.14
+    restart: always
+    depends_on: &langfuse-depends-on
+      langfuse-postgres:
+        condition: service_healthy
+      langfuse-minio:
+        condition: service_healthy
+      langfuse-redis:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_healthy
+    environment: &langfuse-env
+      NEXTAUTH_URL: http://localhost:3001
+      DATABASE_URL: postgresql://postgres:postgres@langfuse-postgres:5432/postgres
+      SALT: mms-dev-salt
+      # CHANGEME for production: openssl rand -hex 32
+      ENCRYPTION_KEY: fc1b9158f9a9ab2b93a938d7417012a878945cdfd4024b915bae2cb6687813eb
+      TELEMETRY_ENABLED: "false"
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: miniosecret
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: miniosecret
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      REDIS_HOST: langfuse-redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: myredissecret
+  langfuse-web:
+    # LLM 观测入口（docs/3）：UI http://localhost:3001，OTLP/trace 由 SDK 直传。
+    image: langfuse/langfuse:3.225.14
+    restart: always
+    depends_on: *langfuse-depends-on
+    ports:
+      - "3001:3000"
+    environment:
+      <<: *langfuse-env
+      NEXTAUTH_SECRET: mms-dev-nextauth-secret
+      # Bootstrap the org/project and PIN the API keys so no interactive onboarding is
+      # required; CHANGEME for production.
+      LANGFUSE_INIT_ORG_ID: mms-org
+      LANGFUSE_INIT_ORG_NAME: MMS
+      LANGFUSE_INIT_PROJECT_ID: mms
+      LANGFUSE_INIT_PROJECT_NAME: MMS Observability
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-mms-dev-0000000000000000000000
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-mms-dev-0000000000000000000000
+      LANGFUSE_INIT_USER_EMAIL: admin@mms.local
+      LANGFUSE_INIT_USER_NAME: MMS Admin
+      LANGFUSE_INIT_USER_PASSWORD: mms-langfuse-admin
+
+volumes:
+  mms_pgdata:
+  mms_langfuse_postgres:
+  mms_langfuse_clickhouse_data:
+  mms_langfuse_clickhouse_logs:
+  mms_langfuse_minio:
+  mms_langfuse_redis:
+  mms_tempo:
+  mms_loki:
+  mms_prometheus:
+  mms_promtail_positions:
+  mms_grafana:

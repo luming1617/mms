@@ -1,0 +1,203 @@
+groups:
+  - name: mms-production-alerts
+    rules:
+      - alert: MMSDefaultLatencySLOBreach
+        expr: mms:query_latency_seconds:p95_default > 0.300 or mms:query_latency_seconds:p99_default > 0.800
+        for: 10m
+        labels: {severity: critical, owner: mms-sre}
+        annotations:
+          summary: 默认档查询延迟超 SLO
+          runbook: mms-retrieval-latency
+      - alert: MMSExtendedLatencySLOBreach
+        expr: mms:query_latency_seconds:p95_extended > 0.500 or mms:query_latency_seconds:p99_extended > 1.500
+        for: 10m
+        labels: {severity: warning, owner: mms-sre}
+        annotations: {summary: 扩展档查询 P95 超 SLO, runbook: mms-retrieval-latency}
+      - alert: MMSAvailabilitySLOBreach
+        expr: mms:query_availability:ratio_rate5m < 0.999
+        for: 10m
+        labels: {severity: critical, owner: mms-sre}
+        annotations: {summary: 查询可用性低于 99.9%, runbook: mms-api-availability}
+      - alert: MMSDegradedRatioHigh
+        expr: mms:degraded:ratio_rate5m > 0.02
+        for: 10m
+        labels: {severity: warning, owner: mms-sre}
+        annotations: {summary: 检索降级率超过 2%, runbook: mms-retrieval-degraded}
+      - alert: MMSEmbeddingPendingTooOld
+        expr: mms_embedding_job_oldest_age_seconds > 300
+        for: 5m
+        labels: {severity: critical, owner: mms-embedding}
+        annotations: {summary: Embedding PENDING 最老超过 5 分钟, runbook: mms-embedding-backlog}
+      - alert: MMSEmbeddingFreshnessSLOBreach
+        expr: mms:embedding_ready_age_seconds:p95 > 30 or mms:embedding_ready_age_seconds:p99 > 120
+        for: 10m
+        labels: {severity: critical, owner: mms-embedding}
+        annotations: {summary: Embedding 新鲜度超 SLO, runbook: mms-embedding-freshness}
+      - alert: MMSEmbeddingProviderFailures
+        expr: sum(rate(mms_embedding_provider_requests_total{status=~"error|timeout"}[5m])) / sum(rate(mms_embedding_provider_requests_total[5m])) > 0.01
+        for: 10m
+        labels: {severity: warning, owner: mms-embedding}
+        annotations: {summary: Embedding Provider 错误率超过 1%, runbook: mms-embedding-provider}
+      - alert: MMSTranslationSLOBreach
+        expr: mms:translation_ready_age_seconds:p95 > 120
+        for: 10m
+        labels: {severity: warning, owner: mms-multilingual}
+        annotations: {summary: 翻译视图新鲜度超 SLO, runbook: mms-translation}
+      - alert: MMSTranslationFailureRatioHigh
+        expr: sum(rate(mms_translation_failures_total[15m])) / sum(rate(mms_translation_latency_seconds_count[15m])) > 0.01
+        for: 15m
+        labels: {severity: warning, owner: mms-multilingual}
+        annotations: {summary: 翻译失败率超过 1%, runbook: mms-translation}
+      - alert: MMSExactSearchLatencyHigh
+        expr: mms:vector_search_latency_seconds:p95_exact > 0.300
+        for: 10m
+        labels: {severity: warning, owner: mms-sre}
+        annotations: {summary: exact 检索 P95 超预算, runbook: mms-exact-retrieval}
+      - alert: MMSLargeCustomerGrowing
+        expr: increase(mms_exact_scan_large_customer_total[15m]) > 0
+        labels: {severity: warning, owner: mms-sre}
+        annotations: {summary: 出现超 exact 扫描软上限客户, runbook: mms-exact-capacity}
+      - alert: MMSPerCustomerVectorCapacityReview
+        expr: mms_customers_over_exact_soft_limit > 0
+        for: 1h
+        labels: {severity: warning, owner: mms-sre}
+        annotations: {summary: 有客户 READY 向量数持续超过软上限，进入容量评审 (docs 13.4), runbook: mms-exact-capacity}
+      - alert: MMSViewBudgetExhausted
+        expr: increase(mms_view_budget_exhausted_total[15m]) > 0
+        labels: {severity: warning, owner: mms-multilingual}
+        annotations: {summary: 单记忆视图预算耗尽, runbook: mms-view-budget}
+      - alert: MMSRequiredViewMissing
+        expr: mms_view_missing_views{view_kind=~"ORIGINAL|CANONICAL"} > 0
+        for: 5m
+        labels: {severity: critical, owner: mms-data}
+        annotations: {summary: ORIGINAL/CANONICAL 视图缺失, runbook: mms-view-reconcile}
+      - alert: MMSRecallBelowMinimum
+        expr: mms_retrieval_recall_at_10 < on(language,channel) group_left mms_retrieval_recall_baseline
+        for: 10m
+        labels: {severity: critical, owner: mms-quality}
+        annotations: {summary: 某语言 canary Recall@10 低于最低门槛, runbook: mms-recall-canary}
+      - alert: MMSCrossCustomerHit
+        expr: increase(mms_cross_customer_hits_total[1m]) > 0
+        labels: {severity: page, owner: mms-security}
+        annotations: {summary: 检测到跨客户命中，按 P0 安全事件处理, runbook: mms-cross-customer-incident}
+      - alert: MMSBarrierWriteCheckFailure
+        expr: increase(mms_barrier_write_check_failures_total[1m]) > 0
+        labels: {severity: page, owner: mms-data}
+        annotations: {summary: 写路径 barrier 主库校验失败, runbook: mms-barrier-write}
+      - alert: MMSBarrierPostCommitWrite
+        expr: increase(mms_barrier_post_commit_writes_total[1m]) > 0
+        labels: {severity: page, owner: mms-data}
+        annotations: {summary: 屏障提交后仍出现成功写入的 ACTIVE 记忆, runbook: mms-barrier-write}
+      - alert: MMSBarrierCacheStale
+        expr: mms_barrier_cache_age_seconds > 10 or histogram_quantile(0.95, sum by (le, topic) (rate(mms_barrier_event_lag_seconds_bucket[5m]))) > 30
+        for: 5m
+        labels: {severity: critical, owner: mms-data}
+        annotations: {summary: barrier 缓存或事件链路过期, runbook: mms-barrier-cache}
+      - alert: MMSConsentVersionStale
+        expr: increase(mms_consent_version_stale_total[5m]) > 0
+        labels: {severity: critical, owner: mms-data}
+        annotations: {summary: consent 版本落后, runbook: mms-consent-sync}
+      - alert: MMSConsentCheckUnavailable
+        expr: increase(mms_consent_check_total{result="unavailable"}[5m]) > 0
+        labels: {severity: critical, owner: mms-compliance}
+        annotations: {summary: consent 快照缺失或过期，写入 fail-closed, runbook: mms-consent-sync}
+      - alert: MMSInboxAnomaly
+        expr: increase(mms_inbox_duplicate_total[5m]) > 0 or mms_inbox_stale_total > 0
+        labels: {severity: critical, owner: mms-ingestion}
+        annotations: {summary: Inbox 重复或超租约, runbook: mms-inbox-recovery}
+      - alert: MMSEmbeddingLeaseExpiryGrowing
+        expr: increase(mms_embedding_job_lease_expired_total[15m]) > 0
+        labels: {severity: warning, owner: mms-embedding}
+        annotations: {summary: Embedding Job 租约回收持续增长, runbook: mms-embedding-worker}
+      - alert: MMSDecisionReplayMismatch
+        expr: increase(mms_decision_replay_mismatch_total[1m]) > 0 or increase(mms_decision_rule_uncovered_total[1m]) > 0
+        labels: {severity: critical, owner: mms-decision}
+        annotations: {summary: 决策回放不一致或规则未覆盖, runbook: mms-decision-replay}
+      - alert: MMSCurrentOrVersionConflict
+        expr: mms_current_duplicate_total > 0 or mms_current_conflicts_total > 10
+        labels: {severity: critical, owner: mms-data}
+        annotations: {summary: current 重复或版本冲突异常, runbook: mms-current-uniqueness}
+      - alert: MMSAuditGuardFailure
+        expr: increase(mms_audit_append_only_violation_total[1m]) > 0 or increase(mms_admin_audit_write_failures_total[1m]) > 0
+        labels: {severity: page, owner: mms-compliance}
+        annotations: {summary: 审计 append-only 违约或写入失败, runbook: mms-audit-integrity}
+      - alert: MMSDDLGuardRejected
+        expr: increase(mms_ddl_guard_rejected_total[1m]) > 0
+        labels: {severity: critical, owner: mms-data}
+        annotations: {summary: 数据库不变量守卫拒绝写入, runbook: mms-ddl-guard}
+      - alert: MMSTombstoneLedgerFailure
+        expr: increase(mms_deletion_tombstone_ledger_write_failures_total[1m]) > 0 or mms_deletion_tombstone_ledger_lag_seconds > 300
+        labels: {severity: page, owner: mms-compliance}
+        annotations: {summary: WORM 墓碑账本写入失败或滞后, runbook: mms-tombstone-ledger}
+      - alert: MMSDeletionVerifyingStuck
+        expr: mms_deletion_request_verifying > 0
+        for: 15m
+        labels: {severity: page, owner: mms-compliance}
+        annotations: {summary: 删除请求停在 VERIFYING，WORM 账本未确认且屏障持续封锁客户, runbook: mms-deletion-retry}
+      - alert: MMSOutboxFailed
+        expr: mms_outbox_failed_total > 0
+        for: 15m
+        labels: {severity: page, owner: mms-ingestion}
+        annotations: {summary: outbox 存在终态 FAILED 行（STALE_GENERATION 或重试耗尽），事件已不再外发, runbook: mms-outbox-dlq}
+      - alert: MMSInboxStale
+        expr: mms_inbox_stale_total > 0
+        for: 5m
+        labels: {severity: page, owner: mms-ingestion}
+        annotations: {summary: inbox 事件停在 PROCESSING 超过租约+退避窗口，说明 worker 中途失联, runbook: mms-inbox-stale}
+      - alert: MMSIngestionQueueAge
+        expr: mms_ingestion_job_oldest_age_seconds > 300
+        for: 10m
+        labels: {severity: critical, owner: mms-ingestion}
+        annotations: {summary: 最旧待处理摄取任务超 5 分钟，摄取新鲜度 SLO 破线, runbook: mms-ingestion-freshness}
+      - alert: MMSQuotaRejections
+        expr: increase(mms_quota_rejected_total[5m]) > 20
+        labels: {severity: warning, owner: mms-platform}
+        annotations: {summary: 每客户配额 429 激增（docs 12.6），需判定是滥用还是配额过低, runbook: mms-quota}
+      - alert: MMSKafkaDeletionRisk
+        expr: mms_kafka_consumer_lag_seconds > on(topic) 0.5 * mms_kafka_topic_retention_seconds
+        for: 5m
+        labels: {severity: critical, owner: mms-ingestion}
+        annotations: {summary: Kafka lag 超保留期 50%，触发删除重放, runbook: kafka_deletion_replay}
+      - alert: MMSKafkaTombstoneLag
+        expr: histogram_quantile(0.95, sum by (le) (rate(mms_kafka_tombstone_lag_seconds_bucket[5m]))) > 5
+        for: 5m
+        labels: {severity: critical, owner: mms-ingestion}
+        annotations: {summary: Kafka tombstone 发布超过 5 秒, runbook: mms-kafka-tombstone}
+      - alert: MMSOutboxBacklog
+        expr: mms_outbox_oldest_age_seconds > 300
+        for: 5m
+        labels: {severity: critical, owner: mms-ingestion}
+        annotations: {summary: Outbox 最老事件超过 5 分钟, runbook: mms-outbox}
+      - alert: MMSAutomaticExpiryGrowing
+        expr: increase(mms_candidate_expired_by_sla_total[30m]) > 0 or increase(mms_conflict_timeout_expired_total[30m]) > 0
+        labels: {severity: warning, owner: mms-review}
+        annotations: {summary: 候选或冲突自动过期兜底持续增长, runbook: mms-review-sla}
+      - alert: MMSInvalidVector
+        expr: increase(mms_embedding_invalid_vector_total[5m]) > 0
+        labels: {severity: critical, owner: mms-embedding}
+        annotations: {summary: 非法向量被拒绝, runbook: mms-embedding-invalid-vector}
+  - name: mms-telemetry-self
+    rules:
+      - alert: MMSTelemetryExportFailures
+        expr: increase(mms_otel_export_results_total{result!="SUCCESS"}[5m]) > 0
+        labels: {severity: critical, owner: mms-sre}
+        annotations:
+          summary: OTel SDK 导出失败，Trace 可能丢失
+          runbook: mms-telemetry-pipeline
+          description: 应用侧 OTLP 导出返回非 SUCCESS，检查 otel-collector 可达性与负载。
+      - alert: MMSPromScrapeTargetDown
+        expr: up{job=~"mms-.*"} == 0
+        for: 5m
+        labels: {severity: critical, owner: mms-sre}
+        annotations:
+          summary: Prometheus 抓取目标持续离线
+          runbook: mms-telemetry-pipeline
+          description: 监控链路自身失效时，"没有异常"不代表服务健康 (docs/2 §8.2)。
+      - alert: MMSEventLoopBlocked
+        expr: histogram_quantile(0.95, sum by (le) (rate(mms_event_loop_lag_seconds_bucket[5m]))) > 0.25
+        for: 10m
+        labels: {severity: warning, owner: mms-sre}
+        annotations:
+          summary: 事件循环 P95 调度延迟超过 250ms
+          runbook: mms-event-loop-blocking
+          description: 异步接口内存在同步阻塞或长 CPU 段 (docs/2 §7.1)。

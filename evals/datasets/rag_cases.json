@@ -1,0 +1,175 @@
+[
+  {
+    "input": "用户的收货地址是上海市",
+    "expected_output": "记忆上下文应包含用户的收货地址（上海市浦东新区张江路 100 号），检索内容与问题相关，且覆盖回答所需信息；不应包含常旅客号等无关信息。",
+    "context": [
+      "用户的收货地址是上海市浦东新区张江路 100 号。",
+      "用户不喜欢吃辣，偏好清淡饮食。",
+      "订单编号是 A-1024。"
+    ],
+    "additional_metadata": {
+      "case_id": "RAG-001",
+      "name": "contextual-relevancy-recall",
+      "category": "rag.retrieval_quality",
+      "risk_level": "high",
+      "dataset_version": "1.0",
+      "review_status": "approved",
+      "scenario": "retrieval",
+      "applicable_metrics": [
+        "MemoryContextContract",
+        "ContextualRelevancy",
+        "ContextualRecall",
+        "AnswerRelevancy"
+      ],
+      "seed_candidates": [
+        {
+          "memory_type": "CUSTOMER_PROFILE",
+          "fact_key": "shipping.address",
+          "object": {"value": "上海市浦东新区张江路 100 号"},
+          "content": "用户的收货地址是上海市浦东新区张江路 100 号",
+          "content_language": "zh-CN",
+          "source_kind": "USER_EXPLICIT",
+          "language_confidence": 0.99
+        },
+        {
+          "memory_type": "CUSTOMER_PROFILE",
+          "fact_key": "profile.food",
+          "object": {"value": "清淡"},
+          "content": "用户不喜欢吃辣，偏好清淡饮食",
+          "content_language": "zh-CN",
+          "source_kind": "USER_EXPLICIT",
+          "language_confidence": 0.99
+        },
+        {
+          "memory_type": "ACCOUNT_FACT",
+          "fact_key": "account.order_number",
+          "object": {"value": "A-1024"},
+          "content": "订单编号是 A-1024",
+          "content_language": "zh-CN",
+          "source_kind": "SYSTEM_OF_RECORD",
+          "language_confidence": 0.99
+        }
+      ],
+      "query": {"language": "zh-CN", "purpose": "CURRENT_ANSWER", "max_items": 8},
+      "expectations": {
+        "http_status": 200,
+        "top1_content": "用户的收货地址是上海市浦东新区张江路 100 号",
+        "absent_terms": ["常旅客号"],
+        "memory_count_min": 1
+      },
+      "judge": {
+        "contextual_relevancy_threshold": 0.75,
+        "contextual_recall_threshold": 0.75,
+        "answer_relevancy_threshold": 0.75
+      }
+    }
+  },
+  {
+    "input": "用户的航班常旅客号是多少",
+    "expected_output": "记忆库中不存在常旅客号信息，返回的记忆上下文不得编造或断言任何常旅客号；允许返回弱相关的其他记忆，但内容必须是已存储的真实记忆。",
+    "context": [
+      "客户从未提供过航班常旅客号。",
+      "客户已有记忆仅包含饮食偏好与订单编号。"
+    ],
+    "additional_metadata": {
+      "case_id": "RAG-002",
+      "name": "missing-info-no-fabrication",
+      "category": "rag.hallucination_guard",
+      "risk_level": "high",
+      "dataset_version": "1.0",
+      "review_status": "approved",
+      "scenario": "retrieval",
+      "applicable_metrics": ["MemoryContextContract", "AnswerCorrectness"],
+      "seed_candidates": [
+        {
+          "memory_type": "CUSTOMER_PROFILE",
+          "fact_key": "profile.food",
+          "object": {"value": "清淡"},
+          "content": "用户不喜欢吃辣，偏好清淡饮食",
+          "content_language": "zh-CN",
+          "source_kind": "USER_EXPLICIT",
+          "language_confidence": 0.99
+        },
+        {
+          "memory_type": "ACCOUNT_FACT",
+          "fact_key": "account.order_number",
+          "object": {"value": "A-1024"},
+          "content": "订单编号是 A-1024",
+          "content_language": "zh-CN",
+          "source_kind": "SYSTEM_OF_RECORD",
+          "language_confidence": 0.99
+        }
+      ],
+      "query": {"language": "zh-CN", "purpose": "CURRENT_ANSWER", "max_items": 8},
+      "expectations": {
+        "http_status": 200,
+        "absent_terms": ["常旅客号", "CA1234", "888888"],
+        "contents_subset": [
+          "用户不喜欢吃辣，偏好清淡饮食",
+          "订单编号是 A-1024"
+        ]
+      },
+      "judge": {
+        "criteria": "Evaluate whether the memory context fabricates or asserts any frequent-flyer number for the user. The correct behavior is to only return genuinely stored memories and never invent the requested information. Penalize any assertion of a specific frequent-flyer number; do not penalize weakly-related but genuine stored memories.",
+        "threshold": 0.80
+      }
+    }
+  },
+  {
+    "input": "用户不喜欢吃辣",
+    "expected_output": "与饮食相关的记忆应排在无关记忆之前：清淡饮食偏好排第一，订单编号等无关记忆不应排在它前面。",
+    "context": [
+      "用户不喜欢吃辣，偏好清淡饮食。",
+      "订单编号是 A-1024。",
+      "用户的收货地址是上海市浦东新区张江路 100 号。"
+    ],
+    "additional_metadata": {
+      "case_id": "RAG-003",
+      "name": "contextual-precision-ranking",
+      "category": "rag.ranking",
+      "risk_level": "medium",
+      "dataset_version": "1.0",
+      "review_status": "approved",
+      "scenario": "retrieval",
+      "applicable_metrics": ["MemoryContextContract", "ContextualPrecision"],
+      "seed_candidates": [
+        {
+          "memory_type": "CUSTOMER_PROFILE",
+          "fact_key": "profile.food",
+          "object": {"value": "清淡"},
+          "content": "用户不喜欢吃辣，偏好清淡饮食",
+          "content_language": "zh-CN",
+          "source_kind": "USER_EXPLICIT",
+          "language_confidence": 0.99
+        },
+        {
+          "memory_type": "ACCOUNT_FACT",
+          "fact_key": "account.order_number",
+          "object": {"value": "A-1024"},
+          "content": "订单编号是 A-1024",
+          "content_language": "zh-CN",
+          "source_kind": "SYSTEM_OF_RECORD",
+          "language_confidence": 0.99
+        },
+        {
+          "memory_type": "CUSTOMER_PROFILE",
+          "fact_key": "shipping.address",
+          "object": {"value": "上海市浦东新区张江路 100 号"},
+          "content": "用户的收货地址是上海市浦东新区张江路 100 号",
+          "content_language": "zh-CN",
+          "source_kind": "USER_EXPLICIT",
+          "language_confidence": 0.99
+        }
+      ],
+      "query": {"language": "zh-CN", "purpose": "CURRENT_ANSWER", "max_items": 8},
+      "expectations": {
+        "http_status": 200,
+        "top1_content": "用户不喜欢吃辣，偏好清淡饮食",
+        "memory_count_min": 1
+      },
+      "judge": {
+        "contextual_precision_threshold": 0.75
+      }
+    }
+  }
+]

@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mms.local/contracts/decision.schema.json",
+  "title": "Memory Decision v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "decision_id",
+    "candidate_id",
+    "outcome",
+    "reason_codes",
+    "rule_trace",
+    "primary_rule_id",
+    "policy_version",
+    "engine_version",
+    "semantic_hash",
+    "normalization_version",
+    "requires_review",
+    "embedding_action"
+  ],
+  "properties": {
+    "decision_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "candidate_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "outcome": {
+      "enum": [
+        "ADD",
+        "SUPERSEDE",
+        "ADD_TEMPORAL_VERSION",
+        "NOOP",
+        "REINFORCE",
+        "CONFLICT",
+        "RESOLVE",
+        "EXPIRE",
+        "IGNORE",
+        "REJECTED",
+        "NEEDS_VERIFICATION",
+        "DELETE_REQUESTED"
+      ]
+    },
+    "target_memory_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "new_memory_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "reason_codes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "rule_trace": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "primary_rule_id": {
+      "type": "string"
+    },
+    "policy_version": {
+      "type": "string"
+    },
+    "fact_key_registry_version": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "engine_version": {
+      "type": "string"
+    },
+    "semantic_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "normalization_version": {
+      "type": "string"
+    },
+    "requires_review": {
+      "type": "boolean"
+    },
+    "embedding_action": {
+      "enum": [
+        "UPSERT",
+        "UPSERT_VIEWS",
+        "DELETE",
+        "UPSERT_NEW_AND_DELETE_OLD",
+        "NOOP",
+        "REBUILD"
+      ]
+    },
+    "view_actions": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "default": []
+    },
+    "index_generation": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "matched_memory_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "default": []
+    },
+    "expected_versions": {
+      "type": "object",
+      "default": {}
+    },
+    "score_breakdown": {
+      "type": "object",
+      "default": {}
+    },
+    "context_snapshot": {
+      "type": "object",
+      "default": {}
+    }
+  }
+}

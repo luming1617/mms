@@ -1,0 +1,17 @@
+title = "Memory Management Service secret scan"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Local development defaults and synthetic test fixtures; production credentials must never be committed."
+paths = [
+  '''^docker/docker-compose\.yml$''',
+  '''^\.env\.example$''',
+  '''^scripts/canary\.py$''',
+  '''^tests/''',
+]
+regexes = [
+  '''dev-token''',
+  '''postgres(?:ql)?://mms:mms@''',
+]

@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mms.local/contracts/policy.schema.json",
+  "title": "Memory Policy Config v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ignore_threshold",
+    "auto_accept_threshold",
+    "scoring_weights",
+    "semantic_match_threshold",
+    "auto_write",
+    "review_rules",
+    "retention_days",
+    "sensitive_policy",
+    "language_confidence_min",
+    "translatable",
+    "max_views_per_memory",
+    "customer_visible_types",
+    "review_sla_days",
+    "conflict_max_age_days"
+  ],
+  "properties": {
+    "ignore_threshold": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "auto_accept_threshold": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
+    },
+    "scoring_weights": {
+      "type": "object"
+    },
+    "semantic_match_threshold": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "auto_write": {
+      "type": "boolean"
+    },
+    "review_rules": {
+      "type": "object"
+    },
+    "retention_days": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "sensitive_policy": {
+      "type": "object"
+    },
+    "language_confidence_min": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "translatable": {
+      "type": "boolean"
+    },
+    "max_views_per_memory": {
+      "type": "integer",
+      "minimum": 2,
+      "maximum": 32
+    },
+    "customer_visible_types": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "review_sla_days": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "conflict_max_age_days": {
+      "type": "integer",
+      "minimum": 1
+    }
+  }
+}

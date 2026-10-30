@@ -1,0 +1,118 @@
+name: Nightly Deep Quality
+
+on:
+  schedule:
+    # 02:00 Asia/Shanghai (18:00 UTC)
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deep-gate:
+    name: Coverage, benchmarks and full audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: mms
+          POSTGRES_USER: mms
+          POSTGRES_PASSWORD: mms
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mms -d mms"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      MMS_DATABASE_URL: postgresql://mms:mms@127.0.0.1:5432/mms
+      MMS_TEST_DATABASE_URL: postgresql://mms:mms@127.0.0.1:5432/mms
+      MMS_SERVICE_TOKEN: dev-token
+      DEEPEVAL_TELEMETRY_OPT_OUT: YES
+      DEEPEVAL_CACHE_FOLDER: /tmp/mms-deepeval-cache
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Initialize database
+        run: python scripts/init_db.py
+      - name: Run nightly gate
+        run: |
+          python scripts/quality_gate.py \
+            --profile nightly \
+            --skip gitleaks,new-code-coverage,mutation
+      - name: Upload nightly report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-quality-report-${{ github.run_id }}
+          path: quality/reports
+          retention-days: 180
+          if-no-files-found: ignore
+
+  mutation:
+    name: Mutation testing
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install mutation tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[mutation]" pytest
+      - name: Run mutation testing
+        run: python scripts/mutation_check.py --json-report quality/reports/mutation.json
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report-${{ github.run_id }}
+          path: quality/reports/mutation.json
+          retention-days: 180
+          if-no-files-found: ignore
+
+  dependency-audit:
+    name: Full dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Audit installed dependency set
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip-audit --progress-spinner off --skip-editable --vulnerability-service osv
+
+  secret-scan:
+    name: Full-history secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          GITLEAKS_CONFIG: ${{ github.workspace }}/.gitleaks.toml

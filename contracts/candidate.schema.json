@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mms.local/contracts/candidate.schema.json",
+  "title": "Memory Candidate v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "customer_id",
+    "source_system",
+    "source_event_id",
+    "memory_type",
+    "fact_key",
+    "object_json",
+    "content",
+    "content_language",
+    "source_kind",
+    "observed_at",
+    "policy_version"
+  ],
+  "properties": {
+    "candidate_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "customer_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "source_system": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "source_event_id": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "memory_type": {
+      "enum": [
+        "CUSTOMER_PROFILE",
+        "SERVICE_HISTORY",
+        "ACTIVE_ISSUE",
+        "COMMITMENT",
+        "EPHEMERAL_CONTEXT",
+        "ACCOUNT_FACT"
+      ]
+    },
+    "fact_key": {
+      "type": "string",
+      "pattern": "^[a-z0-9_.-]+$"
+    },
+    "subject": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "predicate": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "entity_type": {
+      "type": "string",
+      "default": ""
+    },
+    "entity_ref": {
+      "type": "string",
+      "default": ""
+    },
+    "value_slot": {
+      "type": "string",
+      "default": ""
+    },
+    "object_json": {
+      "type": "object"
+    },
+    "content": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "content_language": {
+      "type": "string"
+    },
+    "language": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "script": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "language_confidence": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 1
+    },
+    "source_kind": {
+      "enum": [
+        "SYSTEM_OF_RECORD",
+        "USER_EXPLICIT",
+        "AGENT_CONFIRMED",
+        "USER_IMPLICIT",
+        "MODEL_INFERRED",
+        "KNOWLEDGE_RETRIEVED",
+        "ASSISTANT_GENERATED"
+      ]
+    },
+    "source_refs": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "default": []
+    },
+    "confidence": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 1
+    },
+    "sensitivity": {
+      "enum": [
+        "LOW",
+        "MEDIUM",
+        "HIGH"
+      ],
+      "default": "LOW"
+    },
+    "explicit_correction": {
+      "type": "boolean",
+      "default": false
+    },
+    "valid_from": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "valid_to": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "policy_version": {
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,707 @@
+{
+ "uid": "mms-observability",
+ "title": "MMS Observability - Golden Signals",
+ "tags": [
+  "mms",
+  "observability"
+ ],
+ "timezone": "browser",
+ "schemaVersion": 39,
+ "version": 1,
+ "refresh": "30s",
+ "time": {
+  "from": "now-1h",
+  "to": "now"
+ },
+ "panels": [
+  {
+   "type": "timeseries",
+   "title": "API availability (5m ratio)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mms-prom"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 8,
+    "x": 0,
+    "y": 0
+   },
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "mms:query_availability:ratio_rate5m",
+     "legendFormat": "availability",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mms-prom"
+     }
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "Traffic: RPS by route template",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mms-prom"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 8,
+    "x": 8,
+    "y": 0
+   },
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (route) (rate(mms_api_requests_total[5m]))",
+     "legendFormat": "{{route}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mms-prom"
+     }
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "Errors: 5xx ratio by route",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mms-prom"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 8,
+    "x": 16,
+    "y": 0
+   },
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (route) (rate(mms_api_requests_total{code=~\"5..\"}[5m])) / sum by (route) (rate(mms_api_requests_total[5m]))",
+     "legendFormat": "{{route}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mms-prom"
+     }
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "Latency: P95 by route template",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mms-prom"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 8,
+    "x": 0,
+    "y": 7
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s"
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "histogram_quantile(0.95, sum by (le, route) (rate(mms_api_latency_seconds_bucket[5m])))",
+     "legendFormat": "{{route}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mms-prom"
+     }
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "Saturation: in-flight requests",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mms-prom"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 8,
+    "x": 8,
+    "y": 7
+   },
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "mms_http_in_flight",
+     "legendFormat": "in-flight",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mms-prom"
+     }
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "Python runtime: event loop lag P95",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mms-prom"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 8,
+    "x": 16,
+    "y": 7
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s"
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "histogram_quantile(0.95, sum by (le) (rate(mms_event_loop_lag_seconds_bucket[5m])))",
+     "legendFormat": "loop lag",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mms-prom"
+     }
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "DB pool connections (open/available/waiting)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mms-prom"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 8,
+    "x": 0,
+    "y": 14
+   },
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "mms_db_pool_connections",
+     "legendFormat": "{{pool}} {{state}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mms-prom"
+     }
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "Telemetry health: OTel export results",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mms-prom"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 8,
+    "x": 8,
+    "y": 14
+   },
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (result) (rate(mms_otel_export_results_total[5m]))",
+     "legendFormat": "{{result}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mms-prom"
+     }
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "Embedding worker job outcomes",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mms-prom"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 8,
+    "x": 16,
+    "y": 14
+   },
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (status) (rate(mms_embedding_jobs_total[5m]))",
+     "legendFormat": "{{status}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mms-prom"
+     }
+    }
+   ]
+  },
+  {
+   "type": "stat",
+   "title": "Prometheus scrape targets (mms-*)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mms-prom"
+   },
+   "gridPos": {
+    "h": 5,
+    "w": 24,
+    "x": 0,
+    "y": 21
+   },
+   "options": {
+    "colorMode": "background",
+    "textMode": "value_and_name",
+    "orientation": "auto",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "1": {
+         "text": "UP",
+         "color": "green"
+        },
+        "0": {
+         "text": "DOWN",
+         "color": "red"
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "up{job=~\"mms-.*\"}",
+     "legendFormat": "{{job}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mms-prom"
+     }
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "LLM requests: rate by provider/model/operation",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mms-prom"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 8,
+    "x": 0,
+    "y": 26
+   },
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (provider, model, operation) (rate(mms_llm_requests_total[5m]))",
+     "legendFormat": "{{provider}} {{model}} {{operation}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mms-prom"
+     }
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "LLM error ratio by provider/model",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mms-prom"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 8,
+    "x": 8,
+    "y": 26
+   },
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (provider, model) (rate(mms_llm_requests_total{status=\"error\"}[5m])) / clamp_min(sum by (provider, model) (rate(mms_llm_requests_total[5m])), 1e-9)",
+     "legendFormat": "{{provider}} {{model}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mms-prom"
+     }
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "LLM call P95 latency by provider/operation",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mms-prom"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 8,
+    "x": 16,
+    "y": 26
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s"
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "histogram_quantile(0.95, sum by (le, provider, operation) (rate(mms_llm_request_duration_seconds_bucket[5m])))",
+     "legendFormat": "{{provider}} {{operation}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mms-prom"
+     }
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "LLM tokens: rate by model/direction",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mms-prom"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 8,
+    "x": 0,
+    "y": 33
+   },
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (model, direction) (rate(mms_llm_tokens_total[5m]))",
+     "legendFormat": "{{model}} {{direction}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mms-prom"
+     }
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "RAG retrieval: P95 duration + result count",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mms-prom"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 8,
+    "x": 8,
+    "y": 33
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s"
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "histogram_quantile(0.95, sum by (le, mode) (rate(mms_rag_retrieval_duration_seconds_bucket[5m])))",
+     "legendFormat": "p95 {{mode}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mms-prom"
+     }
+    },
+    {
+     "refId": "B",
+     "expr": "sum(rate(mms_rag_retrieval_results_count[5m]))",
+     "legendFormat": "queries",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mms-prom"
+     }
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "Quality: user feedback score average (Langfuse 汇总)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mms-prom"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 8,
+    "x": 16,
+    "y": 33
+   },
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "mms_rag_quality_score_avg",
+     "legendFormat": "{{evaluator}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mms-prom"
+     }
+    }
+   ]
+  }
+ ]
+}

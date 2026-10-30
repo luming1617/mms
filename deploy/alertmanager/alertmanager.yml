@@ -1,0 +1,11 @@
+route:
+  receiver: mms-default
+  group_by: [alertname]
+  group_wait: 10s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: mms-default
+    # Local compose profile intentionally drops notifications: an empty receiver is valid.
+    # Production wires a real integration (PagerDuty/Slack/webhook) here (docs/2 §8.2/§8.3).

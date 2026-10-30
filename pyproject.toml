@@ -1,0 +1,162 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mms"
+version = "0.1.0"
+description = "Memory Management Service Phase 0/1/2/3 implementation"
+requires-python = ">=3.13"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "psycopg[binary,pool]>=3.2",
+  "httpx>=0.27",
+  "pgvector>=0.4",
+  "pydantic>=2.9",
+  "pydantic-settings>=2.5",
+  "prometheus-client>=0.21",
+  "jsonschema>=4.23",
+  "opentelemetry-api>=1.27",
+  "opentelemetry-sdk>=1.27",
+  "opentelemetry-instrumentation-fastapi>=0.48b0",
+  "opentelemetry-instrumentation-httpx>=0.48b0",
+  "opentelemetry-instrumentation-psycopg>=0.48b0",
+  "opentelemetry-exporter-otlp-proto-http>=1.27",
+  "langfuse>=3.15,<4"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "hypothesis>=6.112",
+  "httpx>=0.27",
+  "ruff>=0.7",
+  "mypy>=1.11",
+  "pytest-cov>=5.0",
+  "bandit[toml]>=1.7.9",
+  "pip-audit>=2.7",
+  "pytest-benchmark>=4.0",
+  "diff-cover>=9.0",
+  "radon>=6.0",
+  "types-jsonschema>=4.23",
+  "deepeval>=4.3,<5"
+]
+mutation = ["mutmut>=3.2,<4"]
+load = ["locust>=2.31"]
+
+[project.scripts]
+mms-api = "mms.api.main:run"
+mms-worker = "mms.services.worker:main"
+mms-ingestion = "mms.services.ingestion:main"
+mms-outbox = "mms.services.outbox:main"
+mms-recon = "mms.services.recon:main"
+mms-lifecycle = "mms.services.lifecycle:main"
+mms-translation = "mms.services.translation:main"
+mms-view-cost = "mms.services.view_cost:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["mms*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers -m 'not slow'"
+markers = [
+  "unit: tests that do not require PostgreSQL or other external services",
+  "integration: tests that require PostgreSQL via MMS_TEST_DATABASE_URL",
+  "evaluation: DeepEval service evaluation tests",
+  "benchmark: pytest-benchmark performance tests",
+  "public_benchmark: public-benchmark evaluation tests (LongMemEval/LoCoMo); excluded from the PR gate, run by the nightly llm-evaluation workflow",
+  "slow: tests excluded from the default local and PR profiles",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["mms"]
+relative_files = true
+omit = []
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+# The unified quality gate enforces line/branch thresholds with a baseline
+# ratchet; keeping fail_under here would bypass that governance.
+fail_under = 0
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+src = ["src", "tests", "evals"]
+
+[tool.ruff.lint]
+select = [
+  "E",    # pycodestyle errors
+  "F",    # Pyflakes
+  "W",    # pycodestyle warnings
+  "I",    # import sorting
+  "B",    # bugbear: common error patterns
+  "UP",   # pyupgrade
+  "S",    # flake8-bandit: security patterns
+  "SIM",  # simplification
+  "RUF",  # Ruff-specific rules
+  "PGH",  # pygrep-hooks: typed ignore discipline
+]
+ignore = [
+  "E501",  # ruff format owns code wrapping; long SQL/JSON literals cannot be split safely
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["mms"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.per-file-ignores]
+# Tests and tooling legitimately use asserts and controlled subprocesses.
+"tests/**" = ["S101", "S105", "S106", "S108", "E402"]
+"tests/test_phase03_quality_security.py" = ["RUF001"]  # intentional Chinese punctuation in adversarial inputs
+"scripts/**" = ["S101", "S314", "S603", "S607", "E402"]
+# Offline evaluation suites follow the same conventions as tests: asserts are
+# the gate mechanism and sys.path bootstrapping forces late imports. The
+# recorder shells out to git for run metadata exactly like the gate itself.
+"evals/**" = ["S101", "S105", "S106", "S108", "E402", "S603", "S607"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.13"
+files = ["src/mms"]
+warn_return_any = true
+warn_unused_configs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+check_untyped_defs = true
+no_implicit_optional = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = ["mms.utils.hashing", "mms.utils.embedding"]
+warn_unused_ignores = false
+
+[tool.bandit]
+exclude_dirs = ["tests", "evals", "scripts", "docker", ".venv"]
+# The runtime package should not use asserts for control flow; tests may.
+
+[tool.mutmut]
+source_paths = [
+  "src/mms/services/rules.py",
+  "src/mms/services/normalizer.py",
+  "src/mms/utils/hashing.py",
+]
+pytest_add_cli_args = ["-q", "-m", "unit", "-p", "no:cacheprovider", "--tb=short"]
+pytest_add_cli_args_test_selection = ["tests/test_rules.py", "tests/test_hashing_normalizer.py"]
+also_copy = ["src/mms"]
+use_git_change_detection = false

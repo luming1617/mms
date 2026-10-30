@@ -1,0 +1,348 @@
+[
+  {
+    "input": "以后请用中文沟通",
+    "expected_output": "返回的记忆上下文第一条应是用户希望使用中文沟通这一偏好，且不应混入与沟通语言无关的记忆。",
+    "context": [
+      "用户明确要求使用中文进行沟通。",
+      "该偏好属于 CUSTOMER_PROFILE 类型的长期记忆。"
+    ],
+    "additional_metadata": {
+      "case_id": "RETRIEVAL-001",
+      "name": "zh-exact-recall",
+      "category": "retrieval.relevancy",
+      "risk_level": "high",
+      "dataset_version": "1.0",
+      "review_status": "approved",
+      "scenario": "retrieval",
+      "applicable_metrics": ["MemoryContextContract", "AnswerRelevancy", "AnswerCorrectness"],
+      "seed_candidates": [
+        {
+          "memory_type": "CUSTOMER_PROFILE",
+          "fact_key": "communication.language",
+          "object": {"value": "zh-CN"},
+          "content": "以后请用中文沟通",
+          "content_language": "zh-CN",
+          "source_kind": "USER_EXPLICIT",
+          "language_confidence": 0.99,
+          "explicit_correction": true
+        }
+      ],
+      "query": {"language": "zh-CN", "purpose": "CURRENT_ANSWER", "max_items": 8},
+      "expectations": {
+        "http_status": 200,
+        "top1_content": "以后请用中文沟通",
+        "memory_count_min": 1,
+        "memory_count_max": 1
+      }
+    }
+  },
+  {
+    "input": "Please use English",
+    "expected_output": "返回的记忆上下文第一条应是用户希望使用英文沟通这一偏好，走英文词法通道且不混入中文记忆。",
+    "context": [
+      "The user explicitly requested English as the communication language.",
+      "该偏好以 en-US 词法（fts）通道召回。"
+    ],
+    "additional_metadata": {
+      "case_id": "RETRIEVAL-002",
+      "name": "en-fts-recall",
+      "category": "retrieval.relevancy",
+      "risk_level": "high",
+      "dataset_version": "1.0",
+      "review_status": "approved",
+      "scenario": "retrieval",
+      "applicable_metrics": ["MemoryContextContract", "AnswerRelevancy", "AnswerCorrectness"],
+      "seed_candidates": [
+        {
+          "memory_type": "CUSTOMER_PROFILE",
+          "fact_key": "communication.language",
+          "object": {"value": "en-US"},
+          "content": "Please use English",
+          "content_language": "en-US",
+          "source_kind": "USER_EXPLICIT",
+          "language_confidence": 0.99,
+          "explicit_correction": true
+        }
+      ],
+      "query": {"language": "en-US", "purpose": "CURRENT_ANSWER", "max_items": 8},
+      "expectations": {
+        "http_status": 200,
+        "top1_content": "Please use English",
+        "memory_count_min": 1,
+        "memory_count_max": 1,
+        "lexical_used": true
+      }
+    }
+  },
+  {
+    "input": "深色主题界面",
+    "expected_output": "对中文模糊查询应通过 trgm 词法通道召回用户的深色主题界面偏好，第一条结果即该记忆。",
+    "context": [
+      "用户偏好深色主题界面。",
+      "中文词法通道为 trgm 相似度匹配。"
+    ],
+    "additional_metadata": {
+      "case_id": "RETRIEVAL-003",
+      "name": "zh-trgm-fuzzy-recall",
+      "category": "retrieval.relevancy",
+      "risk_level": "high",
+      "dataset_version": "1.0",
+      "review_status": "approved",
+      "scenario": "retrieval",
+      "applicable_metrics": ["MemoryContextContract", "AnswerRelevancy"],
+      "seed_candidates": [
+        {
+          "memory_type": "CUSTOMER_PROFILE",
+          "fact_key": "profile.ui_theme",
+          "object": {"value": "dark"},
+          "content": "用户偏好深色主题界面",
+          "content_language": "zh-CN",
+          "source_kind": "USER_EXPLICIT",
+          "language_confidence": 0.99
+        }
+      ],
+      "query": {"language": "zh-CN", "purpose": "CURRENT_ANSWER", "max_items": 8},
+      "expectations": {
+        "http_status": 200,
+        "top1_content": "用户偏好深色主题界面",
+        "memory_count_min": 1
+      }
+    }
+  },
+  {
+    "input": "用户对沟通语言的要求是什么",
+    "expected_output": "带 fact_key 过滤的查询只应返回 communication.language 这一条事实，不应返回同客户的其他事实。",
+    "context": [
+      "fact_key 过滤走精确检索通道。",
+      "客户同时存在沟通语言偏好与界面主题偏好两条不同事实。"
+    ],
+    "additional_metadata": {
+      "case_id": "RETRIEVAL-004",
+      "name": "fact-key-scope",
+      "category": "retrieval.precision",
+      "risk_level": "high",
+      "dataset_version": "1.0",
+      "review_status": "approved",
+      "scenario": "retrieval",
+      "applicable_metrics": ["MemoryContextContract", "AnswerCorrectness"],
+      "seed_candidates": [
+        {
+          "memory_type": "CUSTOMER_PROFILE",
+          "fact_key": "communication.language",
+          "object": {"value": "zh-CN"},
+          "content": "用户要求使用中文沟通",
+          "content_language": "zh-CN",
+          "source_kind": "USER_EXPLICIT",
+          "language_confidence": 0.99
+        },
+        {
+          "memory_type": "CUSTOMER_PROFILE",
+          "fact_key": "profile.ui_theme",
+          "object": {"value": "dark"},
+          "content": "用户偏好深色主题界面",
+          "content_language": "zh-CN",
+          "source_kind": "USER_EXPLICIT",
+          "language_confidence": 0.99
+        }
+      ],
+      "query": {
+        "language": "zh-CN",
+        "purpose": "CURRENT_ANSWER",
+        "max_items": 8,
+        "fact_key": "communication.language"
+      },
+      "expectations": {
+        "http_status": 200,
+        "top1_content": "用户要求使用中文沟通",
+        "contents_subset": ["用户要求使用中文沟通"],
+        "memory_count_min": 1,
+        "memory_count_max": 1
+      }
+    }
+  },
+  {
+    "input": "订单编号",
+    "expected_output": "include_types 限定 ACCOUNT_FACT 后，只应返回订单事实，不应返回 CUSTOMER_PROFILE 类型的偏好记忆。",
+    "context": [
+      "include_types 在语义与词法两个通道都会过滤。",
+      "客户同时存在账户事实与个人偏好两类记忆。"
+    ],
+    "additional_metadata": {
+      "case_id": "RETRIEVAL-005",
+      "name": "include-types-scope",
+      "category": "retrieval.precision",
+      "risk_level": "high",
+      "dataset_version": "1.0",
+      "review_status": "approved",
+      "scenario": "retrieval",
+      "applicable_metrics": ["MemoryContextContract", "AnswerCorrectness"],
+      "seed_candidates": [
+        {
+          "memory_type": "CUSTOMER_PROFILE",
+          "fact_key": "profile.ui_theme",
+          "object": {"value": "dark"},
+          "content": "用户偏好深色主题界面",
+          "content_language": "zh-CN",
+          "source_kind": "USER_EXPLICIT",
+          "language_confidence": 0.99
+        },
+        {
+          "memory_type": "ACCOUNT_FACT",
+          "fact_key": "account.order_number",
+          "object": {"value": "A-1024"},
+          "content": "订单编号是 A-1024",
+          "content_language": "zh-CN",
+          "source_kind": "SYSTEM_OF_RECORD",
+          "language_confidence": 0.99
+        }
+      ],
+      "query": {
+        "language": "zh-CN",
+        "purpose": "CURRENT_ANSWER",
+        "max_items": 8,
+        "include_types": ["ACCOUNT_FACT"]
+      },
+      "expectations": {
+        "http_status": 200,
+        "top1_content": "订单编号是 A-1024",
+        "contents_subset": ["订单编号是 A-1024"],
+        "memory_count_min": 1,
+        "memory_count_max": 1
+      }
+    }
+  },
+  {
+    "input": "用户对界面主题的偏好是什么",
+    "expected_output": "max_tokens 预算小于记忆内容长度时，该记忆应被 token 预算过滤，返回空记忆列表而不是截断内容。",
+    "context": [
+      "检索结果受 max_tokens 预算约束，超限记忆被过滤并在 filtered_reasons 中记录。"
+    ],
+    "additional_metadata": {
+      "case_id": "RETRIEVAL-006",
+      "name": "token-budget-filter",
+      "category": "retrieval.contract",
+      "risk_level": "medium",
+      "dataset_version": "1.0",
+      "review_status": "approved",
+      "scenario": "retrieval",
+      "applicable_metrics": ["MemoryContextContract"],
+      "seed_candidates": [
+        {
+          "memory_type": "CUSTOMER_PROFILE",
+          "fact_key": "profile.ui_theme",
+          "object": {"value": "dark"},
+          "content": "用户偏好深色主题界面并希望导航栏保持纯黑背景",
+          "content_language": "zh-CN",
+          "source_kind": "USER_EXPLICIT",
+          "language_confidence": 0.99
+        }
+      ],
+      "query": {
+        "language": "zh-CN",
+        "purpose": "CURRENT_ANSWER",
+        "max_items": 8,
+        "max_tokens": 5
+      },
+      "expectations": {
+        "http_status": 200,
+        "memory_count_max": 0,
+        "token_budget_filtered": true
+      }
+    }
+  },
+  {
+    "input": "以后请用中文沟通",
+    "expected_output": "面向 Agent 的记忆上下文接口必须在响应中把记忆标记为 untrusted_data，且记忆内容保持原样。",
+    "context": [
+      "Agent 记忆上下文接口返回 trust: untrusted_data 包装，防止记忆内容被当作可信指令。"
+    ],
+    "additional_metadata": {
+      "case_id": "RETRIEVAL-007",
+      "name": "agent-untrusted-wrapper",
+      "category": "retrieval.contract",
+      "risk_level": "high",
+      "dataset_version": "1.0",
+      "review_status": "approved",
+      "scenario": "retrieval",
+      "applicable_metrics": ["MemoryContextContract"],
+      "seed_candidates": [
+        {
+          "memory_type": "CUSTOMER_PROFILE",
+          "fact_key": "communication.language",
+          "object": {"value": "zh-CN"},
+          "content": "以后请用中文沟通",
+          "content_language": "zh-CN",
+          "source_kind": "USER_EXPLICIT",
+          "language_confidence": 0.99,
+          "explicit_correction": true
+        }
+      ],
+      "query": {
+        "language": "zh-CN",
+        "purpose": "CURRENT_ANSWER",
+        "max_items": 8,
+        "endpoint": "agent"
+      },
+      "expectations": {
+        "http_status": 200,
+        "top1_content": "以后请用中文沟通",
+        "trust_untrusted": true,
+        "memory_count_min": 1
+      }
+    }
+  },
+  {
+    "input": "用户的收货地址是上海市",
+    "expected_output": "多条记忆混合时，收货地址相关的记忆应排在第一位，且返回的记忆分数必须非递增。",
+    "context": [
+      "客户存在收货地址、饮食偏好与订单号三类记忆。",
+      "检索结果按相关度排序，分数序列应非递增。"
+    ],
+    "additional_metadata": {
+      "case_id": "RETRIEVAL-008",
+      "name": "multi-seed-ranking",
+      "category": "retrieval.ranking",
+      "risk_level": "high",
+      "dataset_version": "1.0",
+      "review_status": "approved",
+      "scenario": "retrieval",
+      "applicable_metrics": ["MemoryContextContract", "AnswerRelevancy"],
+      "seed_candidates": [
+        {
+          "memory_type": "CUSTOMER_PROFILE",
+          "fact_key": "shipping.address",
+          "object": {"value": "上海市浦东新区张江路 100 号"},
+          "content": "用户的收货地址是上海市浦东新区张江路 100 号",
+          "content_language": "zh-CN",
+          "source_kind": "USER_EXPLICIT",
+          "language_confidence": 0.99
+        },
+        {
+          "memory_type": "CUSTOMER_PROFILE",
+          "fact_key": "profile.food",
+          "object": {"value": "清淡"},
+          "content": "用户不喜欢吃辣，偏好清淡饮食",
+          "content_language": "zh-CN",
+          "source_kind": "USER_EXPLICIT",
+          "language_confidence": 0.99
+        },
+        {
+          "memory_type": "ACCOUNT_FACT",
+          "fact_key": "account.order_number",
+          "object": {"value": "A-1024"},
+          "content": "订单编号是 A-1024",
+          "content_language": "zh-CN",
+          "source_kind": "SYSTEM_OF_RECORD",
+          "language_confidence": 0.99
+        }
+      ],
+      "query": {"language": "zh-CN", "purpose": "CURRENT_ANSWER", "max_items": 8},
+      "expectations": {
+        "http_status": 200,
+        "top1_content": "用户的收货地址是上海市浦东新区张江路 100 号",
+        "scores_non_increasing": true,
+        "memory_count_min": 1
+      }
+    }
+  }
+]

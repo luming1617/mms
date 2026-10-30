@@ -1,0 +1,175 @@
+[
+  {
+    "input": "重复提交同一条候选事件",
+    "expected_output": "同一事实同一值的重复候选应产生 NOOP 决策，最终只保留一条记忆，且该记忆可被正常检索。",
+    "context": [
+      "R050 规则：SAME_FACT_SAME_VALUE 候选产生 NOOP，不新增记忆。"
+    ],
+    "additional_metadata": {
+      "case_id": "REGRESSION-001",
+      "name": "duplicate-ingest-noop",
+      "category": "regression.idempotency",
+      "risk_level": "high",
+      "dataset_version": "1.0",
+      "review_status": "approved",
+      "scenario": "ingestion_gate",
+      "applicable_metrics": ["MemoryContextContract"],
+      "seed_candidates": [
+        {
+          "memory_type": "CUSTOMER_PROFILE",
+          "fact_key": "communication.language",
+          "object": {"value": "zh-CN"},
+          "content": "用户要求使用中文沟通",
+          "content_language": "zh-CN",
+          "source_kind": "USER_EXPLICIT",
+          "language_confidence": 0.99,
+          "source_event_id": "idempotency-event",
+          "source_refs": [{"message_id": "a"}]
+        },
+        {
+          "memory_type": "CUSTOMER_PROFILE",
+          "fact_key": "communication.language",
+          "object": {"value": "zh-CN"},
+          "content": "用户要求使用中文沟通",
+          "content_language": "zh-CN",
+          "source_kind": "USER_EXPLICIT",
+          "language_confidence": 0.99,
+          "source_event_id": "idempotency-event",
+          "source_refs": [{"message_id": "b"}]
+        }
+      ],
+      "query": {"language": "zh-CN", "purpose": "CURRENT_ANSWER", "max_items": 8},
+      "expectations": {
+        "decision_outcomes": ["ADD", "NOOP"],
+        "top1_content": "用户要求使用中文沟通",
+        "memory_count_min": 1,
+        "memory_count_max": 1
+      }
+    }
+  },
+  {
+    "input": "同事实键的两个不同取值需要人工裁决",
+    "expected_output": "单值事实键的第二个不同取值应产生 CONFLICT 并进入复核队列；复核批准后新值生效，检索第一条返回新值对应记忆。",
+    "context": [
+      "R100 规则：互斥取值冲突产生 CONFLICT，进入人工复核。",
+      "复核批准后旧记忆被 SUPERSEDE，新记忆生效。"
+    ],
+    "additional_metadata": {
+      "case_id": "REGRESSION-002",
+      "name": "conflict-review-supersede",
+      "category": "regression.conflict_review",
+      "risk_level": "high",
+      "dataset_version": "1.0",
+      "review_status": "approved",
+      "scenario": "ingestion_gate",
+      "applicable_metrics": ["MemoryContextContract"],
+      "seed_fact_key_registry": "regression.conflict",
+      "seed_candidates": [
+        {
+          "memory_type": "CUSTOMER_PROFILE",
+          "fact_key": "regression.conflict",
+          "object": {"value": "zh-CN"},
+          "content": "用户选择中文服务",
+          "content_language": "zh-CN",
+          "source_kind": "USER_EXPLICIT",
+          "language_confidence": 0.99,
+          "explicit_correction": true
+        },
+        {
+          "memory_type": "CUSTOMER_PROFILE",
+          "fact_key": "regression.conflict",
+          "object": {"value": "en-US"},
+          "content": "用户选择英文服务",
+          "content_language": "en-US",
+          "source_kind": "USER_EXPLICIT",
+          "language_confidence": 0.99,
+          "explicit_correction": true
+        }
+      ],
+      "review_flow": "approve_first",
+      "query": {
+        "language": "zh-CN",
+        "purpose": "CURRENT_ANSWER",
+        "max_items": 8,
+        "fact_key": "regression.conflict"
+      },
+      "expectations": {
+        "decision_outcomes": ["ADD", "CONFLICT"],
+        "review_approved": true,
+        "top1_content": "用户选择英文服务",
+        "memory_count_min": 1,
+        "memory_count_max": 1
+      }
+    }
+  },
+  {
+    "input": "已过期的记忆还能被检索到吗",
+    "expected_output": "expires_at 已过期的记忆不可被检索；生命周期服务将其置为 EXPIRED 后，投影全部失效，查询返回空结果。",
+    "context": [
+      "检索 SQL 与生命周期状态双重约束过期记忆。"
+    ],
+    "additional_metadata": {
+      "case_id": "REGRESSION-003",
+      "name": "expired-memory-not-retrievable",
+      "category": "regression.lifecycle",
+      "risk_level": "high",
+      "dataset_version": "1.0",
+      "review_status": "approved",
+      "scenario": "ingestion_gate",
+      "applicable_metrics": ["MemoryContextContract"],
+      "seed_candidates": [
+        {
+          "memory_type": "CUSTOMER_PROFILE",
+          "fact_key": "profile.ui_theme",
+          "object": {"value": "dark"},
+          "content": "用户偏好深色主题界面",
+          "content_language": "zh-CN",
+          "source_kind": "USER_EXPLICIT",
+          "language_confidence": 0.99,
+          "_expires_offset_days": -1
+        }
+      ],
+      "run_lifecycle": true,
+      "query": {"language": "zh-CN", "purpose": "CURRENT_ANSWER", "max_items": 8},
+      "expectations": {
+        "decision_outcomes": ["ADD"],
+        "memory_count_max": 0
+      }
+    }
+  },
+  {
+    "input": "客户行使删除权后的记忆读取",
+    "expected_output": "客户级删除经复核批准后必须完成并写入删除账本；此后任何读取都被删除屏障拦截（HTTP 410 + CUSTOMER_DELETED），不得返回任何记忆。",
+    "context": [
+      "删除完成后读取屏障返回 CUSTOMER_DELETED（HTTP 410）。"
+    ],
+    "additional_metadata": {
+      "case_id": "REGRESSION-004",
+      "name": "deletion-barrier-blocks-reads",
+      "category": "regression.deletion_barrier",
+      "risk_level": "critical",
+      "dataset_version": "1.0",
+      "review_status": "approved",
+      "scenario": "deletion_barrier",
+      "applicable_metrics": ["MemoryContextContract"],
+      "seed_candidates": [
+        {
+          "memory_type": "CUSTOMER_PROFILE",
+          "fact_key": "communication.language",
+          "object": {"value": "zh-CN"},
+          "content": "用户要求使用中文沟通",
+          "content_language": "zh-CN",
+          "source_kind": "USER_EXPLICIT",
+          "language_confidence": 0.99
+        }
+      ],
+      "request_deletion": true,
+      "query": {"language": "zh-CN", "purpose": "CURRENT_ANSWER", "max_items": 8},
+      "expectations": {
+        "deletion_status": "COMPLETED",
+        "http_status": 410,
+        "barrier_code": "CUSTOMER_DELETED"
+      }
+    }
+  }
+]
