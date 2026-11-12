@@ -178,9 +178,9 @@ flowchart TD
 | Embedding Worker | `python -m mms.services.worker` | `mms-worker` | 9101 | 轮询 1s，`SKIP LOCKED` 租约 |
 | Ingestion Worker | `python -m mms.services.ingestion` | `mms-ingestion` | 9102 | 轮询 inbox job，`SKIP LOCKED` |
 | Outbox Publisher | `python -m mms.services.outbox` | `mms-outbox` | 9103 | 轮询待发，发布前重查屏障 |
-| Lifecycle | `python -m mms.services.lifecycle` | `mms-lifecycle` | 9104 | 60s 轮询 + `SchedulerLock`（会话级 `pg_try_advisory_lock`），每 300s 触发对账 |
+| Lifecycle | `python -m mms.services.lifecycle` | `mms-lifecycle` | 9104 | 60s 轮询 + `ConvergenceLock`（会话级 `pg_try_advisory_lock`），每 300s 触发对账 |
 | Translation | `python -m mms.services.translation` | `mms-translation` | 9105 | 消费 `memory_translation_job`，写完以优先级 120 排 embedding |
-| View-cost | `python -m mms.services.view_cost` | `mms-view-cost` | 9106 | `SchedulerLock` 轮询，超名额时淘汰低价值 TRANSLATED |
+| View-cost | `python -m mms.services.view_cost` | `mms-view-cost` | 9106 | `ConvergenceLock` 轮询，超名额时淘汰低价值 TRANSLATED |
 | Reconciliation | `python -m mms.services.recon` | `mms-recon` | — | 一次性执行，输出 JSON |
 
 多副本安全：队列靠 `SKIP LOCKED`，单例任务靠 advisory 锁；lifecycle 的墓碑清理与扫描已在 2026-10-30 拆到独立事务与独立角色，避免权限错配导致清理静默失败。
@@ -229,7 +229,7 @@ flowchart TD
 | `models/` | `CandidateInput`、`NormalizedCandidate`、`ExistingFact`、`Decision` 等 Pydantic 契约 |
 | `services/` | `extractor` 规则抽取 · `normalizer` 归一与硬门 · `rules` 决策矩阵 · `service` 编排 · `repository` 全部 SQL · `retriever` 检索协议 · `worker`/`ingestion`/`outbox`/`lifecycle`/`translation`/`view_cost`/`recon` 后台进程 · `deletion` 删除与墓碑 · `review` 审核与 4-eyes · `admin` 管理面与审计 · `quota`/`capacity`/`usage` 配额与容量 · `quality` Recall 评估与阶段门禁 |
 | `observability/` | `tracing` OTel 装配 · `llm` Langfuse 模式 A 与脱敏 · `logging_config` JSON 日志 · `request_context` request_id 贯穿 · `runtime`/`attributes`/`bootstrap` 运行时与属性 |
-| `utils/` | `db` 连接池/副本/scrubber 与 deletion 事务/`SchedulerLock` · `embedding` Deterministic 与 Http provider · `reranker` HttpReranker · `language` 脚本与语言判定 · `hashing` 语义哈希与指纹 · `metrics` 指标注册表（契约来源） · `backoff`/`outbound` 重试与出站 TLS/token 强校验 · `query_cache` 查询向量 LRU · `barrier_listener` `LISTEN mms_barrier_changed` 失效 · `tokens`/`errors` |
+| `utils/` | `db` 连接池/副本/scrubber 与 deletion 事务/`ConvergenceLock` · `embedding` Deterministic 与 Http provider · `reranker` HttpReranker · `language` 脚本与语言判定 · `hashing` 语义哈希与指纹 · `metrics` 指标注册表（契约来源） · `backoff`/`outbound` 重试与出站 TLS/token 强校验 · `query_cache` 查询向量 LRU · `barrier_listener` `LISTEN mms_barrier_changed` 失效 · `tokens`/`errors` |
 
 ### 3.2 `evals/`
 

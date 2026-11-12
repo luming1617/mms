@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from mms.utils.db import SchedulerLock
+from mms.utils.db import ConvergenceLock
 
 pytestmark = [
     pytest.mark.integration,
@@ -13,9 +13,9 @@ pytestmark = [
 ]
 
 
-def test_scheduler_lock_is_exclusive_per_name():
-    first = SchedulerLock("mms:test:scheduler")
-    second = SchedulerLock("mms:test:scheduler")
+def test_convergence_lock_is_exclusive_per_name():
+    first = ConvergenceLock("mms:test:scheduler")
+    second = ConvergenceLock("mms:test:scheduler")
     assert first.try_acquire() is True
     try:
         assert second.try_acquire() is False
@@ -25,9 +25,9 @@ def test_scheduler_lock_is_exclusive_per_name():
     second.release()
 
 
-def test_scheduler_lock_names_are_independent():
-    first = SchedulerLock("mms:test:duty-a")
-    other = SchedulerLock("mms:test:duty-b")
+def test_convergence_lock_names_are_independent():
+    first = ConvergenceLock("mms:test:duty-a")
+    other = ConvergenceLock("mms:test:duty-b")
     assert first.try_acquire() is True
     try:
         assert other.try_acquire() is True

@@ -1676,7 +1676,7 @@ class MemoryRepository:
         # Docs 15.4 deletion completion SLI: request creation to full completion, by scope.
         DELETION_COMPLETION.labels(scope=tombstone_reason).observe(float(completed["duration"] or 0))
         # Doc 6.7.1/6.7.6: completion enters the cooling-down window. Reads stay at 410 and
-        # writes stay blocked; only the lifecycle scheduler may later mark it COMPLETED, and
+        # writes stay blocked; only the lifecycle convergence process may later mark it COMPLETED, and
         # a fresh GRANTED consent may cancel it early.
         conn.execute(
             "UPDATE customer_deletion_barrier SET status='COOLING_DOWN', completed_at=now(), updated_at=now() WHERE customer_id=%s",

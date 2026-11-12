@@ -5,7 +5,7 @@ from typing import Any
 
 from ..config import get_settings
 from ..observability.bootstrap import bootstrap_worker
-from ..utils.db import DbConnection, SchedulerLock, get_db, require_row
+from ..utils.db import DbConnection, ConvergenceLock, get_db, require_row
 from ..utils.metrics import (
     CUSTOMERS_OVER_EXACT_SOFT_LIMIT,
     VECTORS_PER_CUSTOMER,
@@ -103,8 +103,8 @@ class ViewCostService:
         VIEW_EVICTED.labels(language=view["view_language"]).inc()
 
     def run_forever(self) -> None:
-        # Doc 13.1: advisory lock keeps a standby view-cost scheduler from duplicating scans.
-        guard = SchedulerLock("mms:scheduler:view-cost")
+        # Doc 13.1: advisory lock keeps a standby view-cost convergence process from duplicating scans.
+        guard = ConvergenceLock("mms:scheduler:view-cost")
         try:
             while True:
                 if guard.try_acquire():

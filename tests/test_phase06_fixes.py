@@ -105,7 +105,7 @@ def test_translation_pre_provider_gate_blocks_closed_memory():
     delete(customer, "delete-" + customer)
 
 
-def test_lifecycle_scheduler_produces_recon(monkeypatch):
+def test_lifecycle_convergence_produces_recon(monkeypatch):
     from mms.services.lifecycle import LifecycleService
 
     calls = []
@@ -121,7 +121,7 @@ def test_lifecycle_scheduler_produces_recon(monkeypatch):
         def run(self, recon_type):
             calls.append(recon_type)
 
-    monkeypatch.setattr("mms.services.lifecycle.SchedulerLock", lambda name: FakeGuard())
+    monkeypatch.setattr("mms.services.lifecycle.ConvergenceLock", lambda name: FakeGuard())
     monkeypatch.setattr("mms.services.recon.ReconciliationService", FakeRecon)
     monkeypatch.setattr("mms.services.lifecycle.time.sleep", lambda seconds: (_ for _ in ()).throw(SystemExit))
 
@@ -240,7 +240,7 @@ def test_worker_pre_provider_reports_active_and_stale_barrier():
     delete(customer, "delete-" + customer)
 
 
-def test_lifecycle_scheduler_survives_recon_failure(monkeypatch):
+def test_lifecycle_convergence_survives_recon_failure(monkeypatch):
     from mms.services.lifecycle import LifecycleService
 
     class FakeGuard:
@@ -254,7 +254,7 @@ def test_lifecycle_scheduler_survives_recon_failure(monkeypatch):
         def run(self, recon_type):
             raise RuntimeError("provider down")
 
-    monkeypatch.setattr("mms.services.lifecycle.SchedulerLock", lambda name: FakeGuard())
+    monkeypatch.setattr("mms.services.lifecycle.ConvergenceLock", lambda name: FakeGuard())
     monkeypatch.setattr("mms.services.recon.ReconciliationService", FailingRecon)
     monkeypatch.setattr("mms.services.lifecycle.time.sleep", lambda seconds: (_ for _ in ()).throw(SystemExit))
 

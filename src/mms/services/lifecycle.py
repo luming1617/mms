@@ -5,7 +5,7 @@ import time
 
 from ..config import get_settings
 from ..observability.bootstrap import bootstrap_worker
-from ..utils.db import SchedulerLock, get_db, require_row
+from ..utils.db import ConvergenceLock, get_db, require_row
 from ..utils.errors import BarrierError
 from ..utils.metrics import (
     CANDIDATE_EXPIRED_BY_SLA,
@@ -294,9 +294,9 @@ class LifecycleService:
         return created
 
     def run_forever(self) -> None:
-        # Doc 13.1: at most one lifecycle scheduler runs scans; a standby polls the
+        # Doc 13.1: at most one lifecycle convergence process runs scans; a standby polls the
         # advisory lock instead of racing VERIFYING gauges and deletion retries.
-        guard = SchedulerLock("mms:scheduler:lifecycle")
+        guard = ConvergenceLock("mms:scheduler:lifecycle")
         last_recon = 0.0
         try:
             while True:
@@ -304,7 +304,7 @@ class LifecycleService:
                     try:
                         self.run_once()
                         # Doc 18.3/18.4: reconciliation metrics need a scheduled producer;
-                        # the lifecycle scheduler owns the single-instance duty.
+                        # the lifecycle convergence process owns the single-instance duty.
                         if time.monotonic() - last_recon >= 300:
                             from .recon import ReconciliationService
 
@@ -313,7 +313,7 @@ class LifecycleService:
                                 for recon_type in ("JOB", "VECTOR", "RECALL", "BUSINESS"):
                                     recon.run(recon_type)
                             except Exception:
-                                # Provider/DB hiccups must not kill the lifecycle scheduler.
+                                # Provider/DB hiccups must not kill the lifecycle convergence process.
                                 logging.getLogger(__name__).exception("scheduled_reconciliation_failed")
                             last_recon = time.monotonic()
                     finally:

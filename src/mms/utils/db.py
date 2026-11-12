@@ -79,7 +79,7 @@ class Database:
         """Doc 8.3.3: the tombstone retention purge escalates to ``mms_deletion_worker``.
 
         That role is the only account with DELETE on ``deletion_tombstone``; the lifecycle
-        scan's own role is deliberately denied so that no ordinary scheduler can drop a
+        scan's own role is deliberately denied so that no ordinary convergence process can drop a
         deletion proof. Same split as ``scrubber_transaction``: production points
         MMS_DELETION_DATABASE_URL at that login, and without it the transaction escalates
         with SET LOCAL ROLE, which only works when the connecting role is a member.
@@ -167,8 +167,8 @@ def get_db() -> Database:
     return _db
 
 
-class SchedulerLock:
-    """Doc 13.1: periodic scheduler duties run single-instance/standby; a session-level
+class ConvergenceLock:
+    """Doc 13.1: periodic convergence duties run single-instance/standby; a session-level
     advisory lock on a dedicated connection keeps a standby from double-executing scans."""
 
     def __init__(self, name: str):
