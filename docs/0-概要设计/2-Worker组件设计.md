@@ -17,7 +17,7 @@
 | Ingestion Job | `memory_ingestion_job` | 把外部事件/候选转化为记忆（提取、决策、语义标准化、视图生成） |
 | Embedding Job | `memory_embedding_job` | 为记忆视图生成向量 |
 | Translation Job | `memory_translation_job` | 生成多语言 TRANSLATED 视图 |
-| Outbox Job | `memory_outbox` | 领域事件可靠外发 |
+| Outbox Job | `memory_outbox_event` | 领域事件可靠外发 |
 
 - 与 `mms-api`、`mms-convergence` 同一代码库、同一镜像，按不同命令启动为不同部署单元（见[《0-总体架构》](0-总体架构.md) 2.1.1）；
 - **水平扩容 = 部署多个 `mms-worker` 实例**：实例间靠 `FOR UPDATE SKIP LOCKED` 行级互斥，天然并行、不重复消费（见 4.2）；四个 Job 共享进程资源，扩容粒度是整个部署单元，不按单队列独立扩容；
@@ -49,7 +49,7 @@
 | 受理 | S1 | 事件受理入队 | API 受理侧 → Ingestion Job | 授权/屏障前置闸；Inbox/Job 双账本同事务写入（事务①，返回 202）；入站统一 HTTP，Kafka 语义（topic/partition/offset/consumer_group，可选）由投递方作为信封元数据传入，消费幂等由 Inbox 账本承担 | [Ingestion Job设计](../1-核心流程/1-Ingestion%20Job设计.md) §五 |
 | 摄取主链 | S2 | 候选提取 | Ingestion Job | 会话/工单/CRM 原文 → 原子候选（LLM 提取；投递方已提取则跳过本步）；路径 A 为会话级 Job，逐候选准备+决策 | [Ingestion Job设计](../1-核心流程/1-Ingestion%20Job设计.md) §六、§二十二、[《04-从会话抽取候选记忆》](../2-详细设计/04-记忆抽取.md) |
 | 摄取主链 | S3 | 语义标准化 | Ingestion Job | 归一化产出 `object_json / semantic_text / semantic_hash / normalization_version` 与候选指纹 | [Ingestion Job设计](../1-核心流程/1-Ingestion%20Job设计.md) §七 |
-| 摄取主链 | S4 | 准入门禁 | Ingestion Job | 硬规则 + 价值评分；REJECTED/IGNORE 终态记审计，NEEDS_VERIFICATION 转审核 | [《05-记忆准入（硬规则+评分）》](../2-详细设计/07-记忆准入判定.md) |
+| 摄取主链 | S4 | 准入门禁 | Ingestion Job | 硬规则 + 价值评分；REJECTED/IGNORE 终态记审计，NEEDS_VERIFICATION 转审核 | [《05-记忆准入（硬规则+评分）》](../2-详细设计/06-记忆准入判定.md) |
 | 摄取主链 | S5 | 判重与决策 | Ingestion Job | 精确 + 语义判重；发现阶段（事务外）+ 权威判定（业务事务内，含 consent 权威判定与提交前复核）两段式决策矩阵 → ADD/NOOP/REINFORCE/SUPERSEDE/CONFLICT/NEEDS_VERIFICATION/DELETE_REQUESTED；与在线同步写路径共用同一实现 | [Ingestion Job设计](../1-核心流程/1-Ingestion%20Job设计.md) §九 |
 | 摄取主链 | S6 | 业务写入（视图生成） | Ingestion Job | 事务②：记忆 + 证据 + 决策 + current + ORIGINAL/CANONICAL 视图原子提交；CONFLICT 转裁决、DELETE_REQUESTED 转删除链路 | [Ingestion Job设计](../1-核心流程/1-Ingestion%20Job设计.md) §十、[《07-记忆写入与更新》](../2-详细设计/08-记忆新增与更新.md) |
 | 摄取主链 | S7 | 下游任务登记（翻译调度） | Ingestion Job | 事务②内：embedding Job（ORIGINAL/CANONICAL，10/100）+ translation Job（七重门控 × 目标语言，120）+ Outbox 事件行 | [Ingestion Job设计](../1-核心流程/1-Ingestion%20Job设计.md) §十一、[Translation Job设计](../1-核心流程/3-Translation%20Job设计.md) §十一 |
@@ -59,11 +59,11 @@
 | 译文投影 | S11 | 读源视图与外呼前闸门 | Translation Job | 读主 ORIGINAL（`source_view_hash` 锚点 + READY）+ 长度闸；外呼前闸门：屏障/代际/记忆状态/跨境同意（fail-closed，绝不让已删除/未授权文本出境） | [Translation Job设计](../1-核心流程/3-Translation%20Job设计.md) §五 |
 | 译文投影 | S12 | 翻译外呼与结果校验 | Translation Job | 调 provider.translate；译文非空 / quality∈[0,1] / 模型版本与 Job 登记一致校验 | [Translation Job设计](../1-核心流程/3-Translation%20Job设计.md) §六 |
 | 译文投影 | S13 | 译文终写与级联 | Translation Job | 终写短事务：屏障/归属/双 hash/同意/视图预算再校验 + 写 TRANSLATED 视图 + 级联登记译文 Embedding Job（120）+ Job 置 READY，原子提交；译文绝不回写原文或事实值 | [Translation Job设计](../1-核心流程/3-Translation%20Job设计.md) §七 |
-| 事件外发 | S14 | 事件产生（Outbox 写入协议） | 业务事务（决策/删除/审核/consent）→ Outbox Job | 业务事务内 9 类触发点写 PENDING 事件行：身份解析生成 customer_ref、`idempotency_key` 去重、`barrier_generation` 快照、`event_id` 生成；与业务表原子提交 | [Outbox Job设计](../1-核心流程/4-Outbox%20Job设计.md) §八 |
-| 事件外发 | S15 | 屏障闸 | Outbox Job | 独立短事务，与写入同口径：删除域事件豁免（屏障通知本身必须发出去）、身份反查、代际/cutover 校验，fail-closed；阻塞 → RETRY 延迟 30s，旧代际/未知身份 → FAILED | [Outbox Job设计](../1-核心流程/4-Outbox%20Job设计.md) §九、本文 10.2 |
-| 事件外发 | S16 | 信封校验与外发（含完成态回写） | Outbox Job | 统一事件契约（event-envelope）校验 → transport（HTTP/本地日志，Kafka 可选）事务外外发 → `locked_by` 围栏回写 PUBLISHED（row_gone 不计成功）；异常退避 RETRY，试满 5 次 FAILED | [Outbox Job设计](../1-核心流程/4-Outbox%20Job设计.md) §九–十 |
+| 事件外发 | S14 | 事件产生（Outbox 写入协议） | 业务事务（决策/删除/审核/consent）→ Outbox Job | 业务事务内 9 类触发点写 PENDING 事件行：身份解析生成 customer_ref、`idempotency_key` 去重、`barrier_generation` 快照、`event_id` 生成；与业务表原子提交 | [OutboxEvent机制设计](../1-核心流程/4-OutboxEvent机制设计.md) §4.1 |
+| 事件外发 | S15 | 屏障闸 | Outbox Job | 独立短事务，与写入同口径：删除域事件豁免（屏障通知本身必须发出去）、身份反查、代际/cutover 校验，fail-closed；阻塞 → RETRY 延迟 30s，旧代际/未知身份 → FAILED | [OutboxEvent机制设计](../1-核心流程/4-OutboxEvent机制设计.md) §4.3、本文 10.2 |
+| 事件外发 | S16 | 信封校验与外发（含完成态回写） | Outbox Job | 统一事件契约（event-envelope）校验 → transport（HTTP/本地日志，Kafka 可选）事务外外发 → `locked_by` 围栏回写 PUBLISHED（row_gone 不计成功）；异常退避 RETRY，试满 5 次 FAILED | [OutboxEvent机制设计](../1-核心流程/4-OutboxEvent机制设计.md) §4.3–4.5 |
 | 横切治理 | S17 | 生命周期执行侧校验 | 各 Job + 删除/决策事务 | 屏障/代际/生命周期状态写前校验，不合规任务 CANCELLED；扫描收敛归 Convergence | 各 Job 文档"删除协同"节、本文第十一章 |
-| 横切治理 | S18 | 重标准化（RENORMALIZE） | Convergence 触发 + Worker 执行 | normalizer 版本升级时原地重算规范化列、置 STALE 重建 CANONICAL/TRANSLATED 视图；不新建版本、不写决策，重建向量以 BACKFILL 优先级执行 | [《09-处理多语言》](../2-详细设计/05-记忆标准化.md) 9.2 |
+| 横切治理 | S18 | 重标准化（RENORMALIZE） | Convergence 触发 + Worker 执行 | normalizer 版本升级时原地重算规范化列、置 STALE 重建 CANONICAL/TRANSLATED 视图；不新建版本、不写决策，重建向量以 BACKFILL 优先级执行 | [《05-记忆标准化》](../2-详细设计/05-记忆语义标准化.md) 9.2.5 |
 
 > 上述每一步都被共性执行骨架"**捞任务 → 前置检查 → 干活 → 复查并写结果 → 失败等待重试**"包裹（第四章）；失败重试、死信重放、对账回收等共性机制见第四、十、十一章，矩阵不再重复。
 
@@ -136,7 +136,7 @@ flowchart TD
         S14["S14 事件产生（业务事务内）<br/>决策/删除/审核/consent 9 类触发点<br/>idempotency_key 去重 · customer_ref 解析 · 代际快照"]
         S15["S15 屏障闸（独立短事务）<br/>与写入同口径（删除域豁免）<br/>身份反查 · 代际/cutover 校验 · fail-closed"]
         S16["S16 信封校验与外发<br/>event-envelope 契约 → transport 外发（事务外）<br/>→ 围栏回写 PUBLISHED / row_gone"]
-        S14 --> QO[("memory_outbox<br/>领域事件")]
+        S14 --> QO[("memory_outbox_event<br/>领域事件")]
         QO --> S15
         S15 --> S16
     end
@@ -419,15 +419,15 @@ provider 外呼超时 10s（见 10.5）。
 
 ---
 
-## 八、Outbox Job（`memory_outbox`）
+## 八、Outbox Job（`memory_outbox_event`）
 
-把领域事件可靠外发——入站 Inbox 的出站镜像。完整细节见 [Outbox Job设计](../1-核心流程/4-Outbox%20Job设计.md)。
+把领域事件可靠外发——入站 Inbox 的出站镜像。完整细节见 [OutboxEvent机制设计](../1-核心流程/4-OutboxEvent机制设计.md)。
 
 ### 8.1 职责与流程
 
 对应 3.1 能力矩阵 S14–S16（事件产生 → 屏障闸 → 校验与外发）：
 
-- **S14 事件产生**：业务事务内写 `memory_outbox`（决策/删除/审核/consent 共 9 类触发点），`idempotency_key` 去重 + customer_ref 解析 + 代际快照，**发布与业务写入解耦**（Kafka 不可用不阻塞 DB 队列）；
+- **S14 事件产生**：业务事务内写 `memory_outbox_event`（决策/删除/审核/consent 共 9 类触发点），`idempotency_key` 去重 + customer_ref 解析 + 代际快照，**发布与业务写入解耦**（Kafka 不可用不阻塞 DB 队列）；
 - **S15 屏障闸**：发布前过**与写入同口径的屏障闸**（删除域事件豁免——屏障通知本身必须发出去，见 10.2）；
 - **S16 信封校验与外发**：信封经**统一事件契约（event-envelope）**校验；transport 可配置（HTTP/本地日志，Kafka 为可选扩展），事务外外发，完成态带 `locked_by` 围栏回写（row_gone 不计成功）。
 
@@ -511,7 +511,7 @@ Worker 没有在线入口，不承担接口鉴权与入口限流（那是 API �
 ### 10.4 出站凭证与重放审计
 
 - provider 外呼携带共享出站凭证（服务间 token），provider 端点内网/mTLS 可达；
-- 死信重放统一走 API 管理端点 `POST /api/v1/admin/dlq/replay`：内部面或管理面凭证，**审计与重入队同事务**，写失败重放不生效；
+- 死信重放统一走 API 管理端点 `POST /admin/dlq/replay`：内部面或管理面凭证，**审计与重入队同事务**，写失败重放不生效；
 - 重放不跳过治理：重新走完整的屏障/代际/同意/预算校验，条件仍不满足则再次取消。
 
 ### 10.5 预算与节流
@@ -565,6 +565,6 @@ Worker 的吞吐由**认领批量 + 轮询间隔 + 租约**自然节流，无入
 - 四个 Job 同进程共享资源，扩容粒度是整个部署单元，无法按单队列独立扩容——换取部署与运维的简单。
 - 合规闸与预算校验在每次外呼前后重复执行，换来的是"文本出境前一刻仍然合法"的强保证——这是刻意付出的成本。
 
-**版本升级只影响投影、不改变事实**：embedding 模型升级走 `REBUILD` 回填、normalizer 升级走 `RENORMALIZE` 重标准化，均以 BACKFILL 优先级执行，不饿死在线链路；事实替代（SUPERSEDE）只由权威事件或用户明确纠正触发（见[《09-处理多语言》](../2-详细设计/05-记忆标准化.md) 9.2、[《07-记忆写入与更新》](../2-详细设计/08-记忆新增与更新.md)）。
+**版本升级只影响投影、不改变事实**：embedding 模型升级走 `REBUILD` 回填、normalizer 升级走 `RENORMALIZE` 重标准化，均以 BACKFILL 优先级执行，不饿死在线链路；事实替代（SUPERSEDE）只由权威事件或用户明确纠正触发（见[《05-记忆标准化》](../2-详细设计/05-记忆语义标准化.md) 9.2.5、[《07-记忆写入与更新》](../2-详细设计/08-记忆新增与更新.md)）。
 
 ---

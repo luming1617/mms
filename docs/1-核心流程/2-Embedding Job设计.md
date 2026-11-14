@@ -347,7 +347,7 @@ stateDiagram-v2
 
 | 阶段 | 读写的表 | 说明 |
 |---|---|---|
-| 登记（上游业务事务内） | 写 `memory_embedding_job`；同事务还有 `customer_memory`、`memory_search_document`、`memory_evidence`、`memory_decision`、`memory_outbox` 等 | Job 与记忆/视图原子提交；配额闸门先查 `customer_quota_usage`（EMBEDDING 桶）与存储配额（11.1） |
+| 登记（上游业务事务内） | 写 `memory_embedding_job`；同事务还有 `customer_memory`、`memory_search_document`、`memory_evidence`、`memory_decision`、`memory_outbox_event` 等 | Job 与记忆/视图原子提交；配额闸门先查 `customer_quota_usage`（EMBEDDING 桶）与存储配额（11.1） |
 | 译文级联登记 | 写 `memory_embedding_job`；同事务写 `memory_search_document`（TRANSLATED）+ `memory_translation_job` 完成态 | Translation Worker 终写事务内级联（11.2） |
 | 回填补登记 | 读 `memory_search_document` + `customer_memory` + `customer_deletion_barrier` + `memory_evidence` + `customer_memory_consent` + `memory_embedding` + 活动 Job；写 `memory_embedding_job` | `INSERT ... SELECT` 多重过滤（11.3） |
 | 认领/重试/死信/重放 | 仅 `memory_embedding_job` | 只改任务行自身的状态/租约/attempts（第四、十二节） |
@@ -445,7 +445,7 @@ WHERE memory_id=… AND embedding_model=… AND embedding_version=…
 - 优先级：TRANSLATED=120，其余=**500（回填不饿死在线链路）**；
 - 支持 `customer_id` / `memory_id` 限定范围（管理员回填用）。
 
-触发方：Convergence 的 VECTOR 对账（第十五节）、管理员手动回填 `POST /api/v1/admin/embeddings/rebuild`（**必须给定 customer_id 或 memory_id 之一**以限定重建范围，admin 鉴权，审计 action=REBUILD 与入队同事务，返回 202 + 入队数）。
+触发方：Convergence 的 VECTOR 对账（第十五节）、管理员手动回填 `POST /admin/embeddings/rebuild`（**必须给定 customer_id 或 memory_id 之一**以限定重建范围，admin 鉴权，审计 action=REBUILD 与入队同事务，返回 202 + 入队数）。
 
 ### 11.4 优先级体系（四档）
 
@@ -497,7 +497,7 @@ WHERE memory_id=… AND embedding_model=… AND embedding_version=…
 
 ### 12.4 死信重放（replay）
 
-`POST /api/v1/admin/dlq/replay`（`job_type=EMBEDDING`，DLQ 专用鉴权：内部服务令牌或管理面凭据）：
+`POST /admin/dlq/replay`（`job_type=EMBEDDING`，DLQ 专用鉴权：内部服务令牌或管理面凭据）：
 
 - **仅当 `status='DEAD_LETTER'`** 时置 `PENDING`、`attempts=0`、`available_at=now()`、清锁与错误码；未命中返回 404（与摄取 replay 不限当前状态不同，这里更严格）；
 - **审计与重入队同事务**（`admin_access_audit`，action=REPLAY，scope 含 job_type/job_id）；
@@ -598,7 +598,7 @@ Embedding Worker 自身不做周期扫描，兜底由 Convergence 侧承担（�
 
 **模型升级（REBUILD，方案 21.9/23.6）**：新模型版本在注册表登记并转 ACTIVE 后，由 Convergence 发起全量重建：为有效记忆按视图登记 `operation=REBUILD` 任务（低优先级，不饿死在线链路）；新向量 READY 后，VECTOR 对账删除旧模型（RETIRED）向量收敛。切换窗口内业务入队用进程设置模型、回填/检索用注册表 ACTIVE 模型，两者短暂不一致由对账删旧补新兜底。
 
-**重标准化（RENORMALIZE，方案 9.2）**：normalizer 升版后，由 Convergence 批量重建受影响的 CANONICAL 规范句与 TRANSLATED 投影（源文本指纹变化传导失效），级联刷新向量；重建期间旧投影仍可召回，新投影 READY 后原子切换。
+**重标准化（RENORMALIZE，方案 9.2.5）**：normalizer 升版后，由 Convergence 批量重建受影响的 CANONICAL 规范句与 TRANSLATED 投影（源文本指纹变化传导失效），级联刷新向量；重建期间旧投影仍可召回，新投影 READY 后原子切换。
 
 ---
 

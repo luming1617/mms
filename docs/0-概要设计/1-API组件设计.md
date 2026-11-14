@@ -10,7 +10,7 @@
 
 这是"去掉中间件、一个库一个事务边界"架构决策（见[《0-总体架构》](0-总体架构.md)）在在线侧的延续：
 
-1. **在线预算必须闭合**：默认档 P95 ≤300ms，预算求和 `20 + 50 + max(96,50) + 30 = 196ms`（[《12-记忆检索》](../2-详细设计/12-记忆检索.md) 12.15）。提取、文档向量、翻译、事件外发任何一个放进请求都会击穿预算——它们全部异步化，热路径只保留"查询向量 + 召回 + 可选 rerank"。
+1. **在线预算必须闭合**：默认档 P95 ≤300ms，预算求和 `20 + 50 + max(96,50) + 30 = 196ms`（[《12-记忆检索》](../2-详细设计/11-记忆检索.md) 12.15）。提取、文档向量、翻译、事件外发任何一个放进请求都会击穿预算——它们全部异步化，热路径只保留"查询向量 + 召回 + 可选 rerank"。
 2. **一个事务边界**：API 的同步写端点与 Worker 的异步消费**共用同一候选决策实现（同一写入主链）**——业务数据、Job、Outbox 同事务提交，在线/离线两条写路径行为一致，不会漂移出两套决策逻辑。
 3. **无状态才能水平扩容**：配额、屏障、同意、业务状态全部在 PG；进程内只有可重建缓存与每副本独立的限流桶，任意副本可杀可加。
 4. **合规闸必须前置在入口**：customer_id 只由网关注入；同意/屏障/审计在读写发生**之前**判定，fail-closed。入口集中，闸才集中。
@@ -25,7 +25,7 @@
 
 - 与 Worker/Convergence 同镜像、不同命令启动；非 root 运行（uid 65532），对外监听 8000 端口（业务与指标同端口）。
 - 业务连接（`MMS_DATABASE_URL`）使用 `mms_app` 账号：业务表/视图表/Job 表/Outbox 可写，但**向量表 `memory_embedding` 的 INSERT/UPDATE 权限被显式回收**——API 永远算不了向量，只能登记 Job 等 Worker 写。
-- 审计擦除连接（`MMS_SCRUBBER_DATABASE_URL`）使用独立的 `mms_audit_scrubber` 账号：审核批准删除时的审计擦除走独立连接（见[《15-安全与审计》](../2-详细设计/15-安全与审计.md)），不复用业务连接。
+- 审计擦除连接（`MMS_SCRUBBER_DATABASE_URL`）使用独立的 `mms_audit_scrubber` 账号：审核批准删除时的审计擦除走独立连接（见[《15-安全与审计》](../2-详细设计/14-安全与审计.md)），不复用业务连接。
 - 决策/审计表 append-only：`mms_app` 对 `memory_decision`/`admin_access_audit` 无 UPDATE/DELETE（DB 层权限回收 + 触发器二次拦截）。
 
 ### 3.2 进程内状态（全部可重建或副本独立）
@@ -42,7 +42,7 @@
 
 - 主池 min 1 / max 8；副本池 min 0 / max 4 / 2s 连接超时（读副本开关默认关）。
 - 读路由：近"写后主库保持窗"（默认 5s）内有写入的客户走主库（写后读一致）；副本异常回退主库并标 `replica_unavailable` 降级。
-- **同意与屏障判定永远走主库**——副本只承载召回 SQL；副本上语义/词法强制串行同池（副本只有一条连接，两通道并行会产生新鲜度不一致，见[《12-记忆检索》](../2-详细设计/12-记忆检索.md) 12.15）。
+- **同意与屏障判定永远走主库**——副本只承载召回 SQL；副本上语义/词法强制串行同池（副本只有一条连接，两通道并行会产生新鲜度不一致，见[《12-记忆检索》](../2-详细设计/11-记忆检索.md) 12.15）。
 
 ### 3.4 启动与关闭
 
@@ -198,9 +198,9 @@ MMS 的业务调用方分两大类——**前台用户**与**后台运营**（�
 
 | 端点 | 调用方 | 用途 | 关键口径 |
 |---|---|---|---|
-| `POST /api/v1/memories/query` | 前台用户 | 语义+词法+精确过滤检索 | 客户面；purpose 服务端映射；`as_of` 仅 HISTORY_DEBUG/AUDIT |
-| `POST /api/v1/agent/memory-context` | 前台用户（客服 Agent） | Agent 注入式上下文 | 客户面；扁平 `memory_context` + `instruction_boundary` + `trust=untrusted_data`；原检索信封下移 `retrieval` |
-| `GET /api/v1/customers/{id}/memories` | 后台运营 · 客服坐席 | 坐席查看客户记忆摘要 | 坐席面；grant 交叉校验 + 审计前置；cursor 分页；脱敏摘要（160 字符） |
+| `POST /memories/query` | 前台用户 | 语义+词法+精确过滤检索 | 客户面；purpose 服务端映射；`as_of` 仅 HISTORY_DEBUG/AUDIT |
+| `POST /agent/memory-context` | 前台用户（客服 Agent） | Agent 注入式上下文 | 客户面；扁平 `memory_context` + `instruction_boundary` + `trust=untrusted_data`；原检索信封下移 `retrieval` |
+| `GET /customers/{id}/memories` | 后台运营 · 客服坐席 | 坐席查看客户记忆摘要 | 坐席面；grant 交叉校验 + 审计前置；cursor 分页；脱敏摘要（160 字符） |
 
 ### 7.2 写入域（同步决策 / 异步摄取）
 
@@ -215,8 +215,8 @@ MMS 的业务调用方分两大类——**前台用户**与**后台运营**（�
 
 | 端点 | 调用方 | 用途 | 关键口径 |
 |---|---|---|---|
-| `POST /api/v1/memories/candidates` | 前台用户 | 单候选同步决策 | 客户面；与 Worker 共用同一写入主链；202 返回决策结果 |
-| `POST /api/v1/extractions` | 前台用户 | 会话提取受理（异步） | 客户面；受理落 Job，202 + job_id；先扣 EXTRACTION 配额；Worker 取数→提取→逐候选决策 |
+| `POST /memories/candidates` | 前台用户 | 单候选同步决策 | 客户面；与 Worker 共用同一写入主链；202 返回决策结果 |
+| `POST /extractions` | 前台用户 | 会话提取受理（异步） | 客户面；受理落 Job，202 + job_id；先扣 EXTRACTION 配额；Worker 取数→提取→逐候选决策 |
 | `POST /internal/ingestion/events` | 内部服务（上游业务系统/事件网关） | 候选事件异步摄取 | 内部面；topic 白名单；Inbox+Job 双账本同事务；202 + job_id |
 | `GET /internal/ingestion/jobs/{id}` | 前台用户 / 后台运营 · 管理维护 | 摄取任务状态查询 | 内部面；状态/attempts/last_error_code |
 
@@ -243,8 +243,8 @@ MMS 的业务调用方分两大类——**前台用户**与**后台运营**（�
 
 | 端点 | 调用方 | 用途 | 关键口径 |
 |---|---|---|---|
-| `POST /api/v1/memories/{id}/feedback` | 前台用户 | 反馈/纠正 | Idempotency-Key 必需；INCORRECT 必须带 correction；纠正走决策引擎 |
-| `POST /api/v1/memory-usage` | 前台用户 | 回报实际采用的记忆 | request_id 关联检索 trace；answer_hash 校验 |
+| `POST /memories/{id}/feedback` | 前台用户 | 反馈/纠正 | Idempotency-Key 必需；INCORRECT 必须带 correction；纠正走决策引擎 |
+| `POST /memory-usage` | 前台用户 | 回报实际采用的记忆 | request_id 关联检索 trace；answer_hash 校验 |
 
 ### 7.4 审核域（管理面）
 
@@ -252,21 +252,21 @@ MMS 的业务调用方分两大类——**前台用户**与**后台运营**（�
 
 | 端点 | 调用方 | 用途 | 关键口径 |
 |---|---|---|---|
-| `GET /api/v1/review-queue` | 后台运营 · 管理维护（审核台） | 待审列表 | MEMORY_READ 同意闸（拒绝降级为空队列）；cursor 分页 |
-| `POST /api/v1/review-queue/{id}/decision` | 后台运营 · 管理维护（审核人） | 审核决策 | `decision_version` 乐观锁；4-eyes（批准人≠提交人）；批准即执行（与业务写入同事务） |
+| `GET /review-queue` | 后台运营 · 管理维护（审核台） | 待审列表 | MEMORY_READ 同意闸（拒绝降级为空队列）；cursor 分页 |
+| `POST /review-queue/{id}/decision` | 后台运营 · 管理维护（审核人） | 审核决策 | `decision_version` 乐观锁；4-eyes（批准人≠提交人）；批准即执行（与业务写入同事务） |
 
 ### 7.5 删除域（客户面）
 
 | 端点 | 调用方 | 用途 | 关键口径 |
 |---|---|---|---|
-| `POST /api/v1/deletion-requests` | 前台用户（终端用户经前台发起） | 请求全量删除 | Idempotency-Key 必需；scope 仅 `{all:true}`；建屏障+审核任务 |
-| `GET /api/v1/deletion-requests/{id}` | 前台用户 | 删除状态/证明 | `proof` 字段随状态返回 |
+| `POST /deletion-requests` | 前台用户（终端用户经前台发起） | 请求全量删除 | Idempotency-Key 必需；scope 仅 `{all:true}`；建屏障+审核任务 |
+| `GET /deletion-requests/{id}` | 前台用户 | 删除状态/证明 | `proof` 字段随状态返回 |
 
 删除请求状态枚举：`RECEIVED` → `APPROVED` → `IN_PROGRESS` → `VERIFYING` → `COMPLETED`；分支终态 `REJECTED` / `CANCELLED`。
 
 删除屏障状态枚举：`ACTIVE`（删除进行中）/ `COOLING_DOWN`（冷却收尾）/ `COMPLETED`（完成）/ `CANCELLED`（重新授权撤销）。
 
-删除审核批准由后台运营 · 管理维护执行（见 7.4）；冷却收尾与墓碑清理归 Convergence（见第十一章）；撤回触发的删除同走此链路（见[《03-记忆授权与撤回》](../2-详细设计/03-记忆授权与撤回.md) 3.4）。
+删除审核批准由后台运营 · 管理维护执行（见 7.4）；冷却收尾与墓碑清理归 Convergence（见第十一章）；撤回触发的删除同走此链路（见[《03-记忆授权与撤回》](../2-详细设计/03-记忆授权.md) 3.4）。
 
 ### 7.6 同意与身份域（内部面）
 
@@ -286,7 +286,7 @@ MMS 的业务调用方分两大类——**前台用户**与**后台运营**（�
 
 | 端点 | 调用方 | 用途 | 关键口径 |
 |---|---|---|---|
-| `GET/POST /internal/customers/{id}/memory-consent` | 内部服务（同意权威系统） | 同意快照读取/同步 | 版本单调；GRANTED 翻屏障；WITHDRAWN 视同删除请求（见[《03-记忆授权与撤回》](../2-详细设计/03-记忆授权与撤回.md) 3.4） |
+| `GET/POST /internal/customers/{id}/memory-consent` | 内部服务（同意权威系统） | 同意快照读取/同步 | 版本单调；GRANTED 翻屏障；WITHDRAWN 视同删除请求（见[《03-记忆授权与撤回》](../2-详细设计/03-记忆授权.md) 3.4） |
 | `GET/POST /internal/customers/{id}/identity-ref` | 内部服务（身份服务/事件投递方） | `customer_ref` 读取/预置 | Kafka 假名（HMAC），幂等 |
 
 ### 7.7 管理域（管理面 + 同事务审计）
@@ -297,12 +297,12 @@ MMS 的业务调用方分两大类——**前台用户**与**后台运营**（�
 
 | 端点 | 调用方 | 用途 | 关键口径 |
 |---|---|---|---|
-| `GET/POST /api/v1/admin/policies` | 后台运营 · 管理维护 | 政策列表/创建/激活/回滚 | 4-eyes（批准人≠创建人）；单 ACTIVE 约束 |
-| `GET /api/v1/admin/fact-keys` | 后台运营 · 管理维护 | 事实键注册表 | 只读 |
-| `POST /api/v1/admin/embeddings/rebuild` | 后台运营 · 管理维护 | 向量重建/回填 | 必须限定客户或记忆；**只登记 Job，Worker 执行** |
-| `POST /api/v1/admin/decisions/replay` | 后台运营 · 管理维护 | 决策回放 | 钉住 policy/registry 版本重放规则矩阵 |
-| `GET /api/v1/admin/memories/{id}/lineage` | 后台运营 · 管理维护 | 证据→决策→版本→向量→使用 | 读前审计 |
-| `POST /api/v1/admin/dlq/replay` | 后台运营 · 管理维护 | 四类队列死信统一重放 | 审计同事务，写失败重放不生效 |
+| `GET/POST /admin/policies` | 后台运营 · 管理维护 | 政策列表/创建/激活/回滚 | 4-eyes（批准人≠创建人）；单 ACTIVE 约束 |
+| `GET /admin/fact-keys` | 后台运营 · 管理维护 | 事实键注册表 | 只读 |
+| `POST /admin/embeddings/rebuild` | 后台运营 · 管理维护 | 向量重建/回填 | 必须限定客户或记忆；**只登记 Job，Worker 执行** |
+| `POST /admin/decisions/replay` | 后台运营 · 管理维护 | 决策回放 | 钉住 policy/registry 版本重放规则矩阵 |
+| `GET /admin/memories/{id}/lineage` | 后台运营 · 管理维护 | 证据→决策→版本→向量→使用 | 读前审计 |
+| `POST /admin/dlq/replay` | 后台运营 · 管理维护 | 四类队列死信统一重放 | 审计同事务，写失败重放不生效 |
 
 ### 7.8 内部运维域（内部面）
 

@@ -27,8 +27,8 @@
 
 | 入口 | 路径 | 是否经过 ingestion_job |
 |---|---|---|
-| `POST /api/v1/memories/candidates` | 同步：候选接收 → 决策，请求内直接返回决策（投递方已完成提取） | 否 |
-| `POST /api/v1/extractions` | **异步：受理落提取请求 Job（202 返回），Worker 取数→提取→决策** | **是** |
+| `POST /memories/candidates` | 同步：候选接收 → 决策，请求内直接返回决策（投递方已完成提取） | 否 |
+| `POST /extractions` | **异步：受理落提取请求 Job（202 返回），Worker 取数→提取→决策** | **是** |
 | `POST /internal/ingestion/events` | **异步：先落候选 Job（202 返回），Worker 后台处理** | **是** |
 
 > 两条异步路径**统一入队、Worker 统一消费、仅差提取方**（A 本系统提取 / B 投递方提取），见第二十二节；candidates/feedback/review 三个同步入口保留同步决策（22.3）。
@@ -92,7 +92,7 @@ flowchart TD
 | S4 | 准入门禁 | 硬规则 + 价值评分；REJECTED/IGNORE 终态记审计，NEEDS_VERIFICATION 转审核 | 第八节 |
 | S5 | 判重与决策 | 精确 + 语义判重；发现阶段（事务外）+ 权威判定（业务事务内，含 consent 权威判定与提交前复核）两段式决策矩阵 → ADD/NOOP/REINFORCE/SUPERSEDE/CONFLICT/NEEDS_VERIFICATION/DELETE_REQUESTED；与在线同步写路径共用同一实现 | 第九节 |
 | S6 | 业务写入（视图生成） | 事务②：记忆 + 证据 + 决策 + current + ORIGINAL/CANONICAL 视图原子提交；CONFLICT 转裁决、DELETE_REQUESTED 转删除链路 | 第十节 |
-| S7 | 下游任务登记（翻译调度） | 事务②内：embedding Job（ORIGINAL/CANONICAL，10/100）+ translation Job（七重门控 × 目标语言，120）+ Outbox 事件行 | 第十一节 / [Translation Job设计](3-Translation%20Job设计.md) / [Outbox Job设计](4-Outbox%20Job设计.md) |
+| S7 | 下游任务登记（翻译调度） | 事务②内：embedding Job（ORIGINAL/CANONICAL，10/100）+ translation Job（七重门控 × 目标语言，120）+ Outbox 事件行 | 第十一节 / [Translation Job设计](3-Translation%20Job设计.md) / [OutboxEvent机制设计](4-OutboxEvent机制设计.md) |
 
 **本文结构**：第四~十一章按关键步骤逐一展开——第四章是 S2–S7 共用的消费执行骨架（部署/主循环/认领），第五~十一章分别对应 S1–S7；第十二~十四章是数据模型、状态机与链路表全景；第十五章起是失败处理、幂等并发、删除协同等横切机制。
 
@@ -204,7 +204,7 @@ WHERE memory_ingestion_job.status IN ('RECEIVED','RETRY','DEAD_LETTER','CANCELLE
 
 ## 六、S2 候选提取
 
-路径 A（`/api/v1/extractions`）由本系统提取：Worker 认领提取请求 Job 后执行"取数 → 切块 → 提取 → 逐候选准备+决策"；路径 B（`/internal/ingestion/events`）投递方已完成提取，**跳过本步**直接进入准备+决策（第九节起）。两条路径的统一入队架构见第二十二节。
+路径 A（`/extractions`）由本系统提取：Worker 认领提取请求 Job 后执行"取数 → 切块 → 提取 → 逐候选准备+决策"；路径 B（`/internal/ingestion/events`）投递方已完成提取，**跳过本步**直接进入准备+决策（第九节起）。两条路径的统一入队架构见第二十二节。
 
 ### 6.1 event_type 分派
 
@@ -214,18 +214,18 @@ WHERE memory_ingestion_job.status IN ('RECEIVED','RETRY','DEAD_LETTER','CANCELLE
 ### 6.2 会话级 Job 协议
 
 - Job 唯一键 `(customer_id, source_system, source_event_id)` 是“一事件一 Job”（12.1 / 5.4）；一次会话提取产出 N 个候选，逐候选入队会同键冲突、互相覆盖。
-- A 路径为**会话级 Job**——一行 Job 对应一次会话提取，payload 带候选数组（Worker 提取后逐候选决策）或原文引用；候选级幂等由候选指纹 `(customer_id, source_system, source_event_id, candidate_fingerprint)` 承担（第十六章），单候选失败不影响同批其他候选（方案 4.9）。B 路径维持一事件一候选一 Job。
+- A 路径为**会话级 Job**——一行 Job 对应一次会话提取，payload 带候选数组（Worker 提取后逐候选决策）或原文引用；候选级幂等由候选指纹 `(customer_id, source_system, source_event_id, candidate_fingerprint)` 承担（第十六章），单候选失败不影响同批其他候选（方案 4.2.5）。B 路径维持一事件一候选一 Job。
 - 接收协议扩展：接收会话级 payload；Inbox 三分支（5.3）与复活规则（5.4）不变。
 
 ### 6.3 取数适配器
 
-- **方案口径**（方案 4.2）：事件只传引用（`message_ids`），不传正文；提取时由 MMS 用服务身份从会话存储取数，并校验会话/消息归属（归属不符按安全事件处理，不提取）。
-- Worker 侧取数适配层：服务身份 + 归属校验 + 超时退避；取数失败属运行失败可重试（方案 4.9）。
-- 若允许传正文：Job 行成为新的正文留存点，必须短期保留、随删除屏障物理清除（第十七章）、不进长期日志/Trace——与方案 4.2“只传引用”原则的偏差要显式记录。
+- **方案口径**（方案 4.2.1）：事件只传引用（`message_ids`），不传正文；提取时由 MMS 用服务身份从会话存储取数，并校验会话/消息归属（归属不符按安全事件处理，不提取）。
+- Worker 侧取数适配层：服务身份 + 归属校验 + 超时退避；取数失败属运行失败可重试（方案 4.2.5）。
+- 若允许传正文：Job 行成为新的正文留存点，必须短期保留、随删除屏障物理清除（第十七章）、不进长期日志/Trace——与方案 4.2.1“只传引用”原则的偏差要显式记录。
 
 ### 6.4 提取器版本与失败分账
 
-- 提取器版本随运行写入（`extractor_version`），模型/规则变更跑回归（方案 4.4/4.11）；决策回放不重新调用提取模型（方案 4.9）。
+- 提取器版本随运行写入（`extractor_version`），模型/规则变更跑回归（方案 4.2.3/4.6）；决策回放不重新调用提取模型（方案 4.2.5）。
 - **失败分账**：提取失败（含取数失败）属运行失败，走退避重试/死信（第十五章）；候选拒绝属业务终态，不重试（15.2）。
 
 ---
@@ -275,7 +275,7 @@ normalizer 版本升级时，由 Convergence 扫描落后于 ACTIVE 版本的记
 
 ### 9.1 发现阶段——事务外的准备
 
-**所有网络 I/O 与重计算都在业务事务和 advisory lock 之外**（方案 4.12），否则外部 provider 的延迟会把该客户的每次写入都钉死在锁后：
+**所有网络 I/O 与重计算都在业务事务和 advisory lock 之外**（方案 4.2.5），否则外部 provider 的延迟会把该客户的每次写入都钉死在锁后：
 
 1. **接收侧预检**（只读、fail-closed、不抛错）：屏障 → `MEMORY_WRITE` →（中/高敏）`SENSITIVE_MEMORY`；任一不过返回空准备结果——**预检只用于阻断外发**，终态 REJECTED 决策仍由事务内权威判定产生（consent 拒绝禁止进 DLQ）；
 2. **跨境同意判定**：`CROSS_BORDER_EMBEDDING` 未授权 → 不调 provider，只保留 semantic_text，发现阶段退化为纯精确匹配；
@@ -515,7 +515,7 @@ flowchart LR
 
 ### 11.3 Outbox 事件行
 
-按 outcome 登记领域事件（`memory.created.v1` / `memory.superseded.v1` / `memory.reinforced.v1`，见 10.2），由 Outbox Job 异步外发（屏障闸 + 信封校验，见 [Outbox Job设计](4-Outbox%20Job设计.md)）；NOOP/拒绝/审核类 outcome 不产生事件。
+按 outcome 登记领域事件（`memory.created.v1` / `memory.superseded.v1` / `memory.reinforced.v1`，见 10.2），由 Outbox Job 异步外发（屏障闸 + 信封校验，见 [OutboxEvent机制设计](4-OutboxEvent机制设计.md)）；NOOP/拒绝/审核类 outcome 不产生事件。
 
 ### 11.4 数据依赖驱动的执行顺序
 
@@ -675,7 +675,7 @@ stateDiagram-v2
 | 认领/重试/死信/重放 | `memory_ingestion_job`（+ Inbox 状态回写） | 只改任务行自身的状态/租约/attempts（第四、十五章） |
 | 发现与决策（只读） | `memory_policy`、`fact_key_registry`、`customer_memory_consent`、`customer_deletion_barrier` | 策略/注册表/同意快照/屏障快照；摄取链路只读不写（consent 为 FOR UPDATE 读锁，9.2） |
 | 配额闸门 | `customer_quota_usage`（WRITE/EMBEDDING 桶）；存储配额按 `customer_memory` 行数统计 | 接收先耗 WRITE；写入前存储/Embedding 闸门，拒绝即整体回滚（10.2） |
-| 业务写入（事务②） | `memory_candidate`、`memory_decision`、`customer_memory`、`memory_evidence`、`memory_search_document`、`customer_memory_current`、`memory_outbox` | 候选指纹/决策审计/记忆+证据/视图/current 指针/领域事件——**链路的业务产出** |
+| 业务写入（事务②） | `memory_candidate`、`memory_decision`、`customer_memory`、`memory_evidence`、`memory_search_document`、`customer_memory_current`、`memory_outbox_event` | 候选指纹/决策审计/记忆+证据/视图/current 指针/领域事件——**链路的业务产出** |
 | 事务②分支表 | `memory_conflict` + `memory_conflict_item` + `memory_review_task`（CONFLICT/NEEDS_VERIFICATION）；`memory_deletion_request` + `customer_deletion_barrier`（DELETE_REQUESTED） | 按决策 outcome 走不同分支（10.2） |
 | 登记下游任务（事务②内） | `memory_embedding_job`、`memory_translation_job` | **另外两张独立的 Job 表**，由 Embedding/Translation Worker 消费，最终写 `memory_embedding` 向量（第十一节） |
 | 删除协同 | `memory_ingestion_job`（取消→物理 DELETE）+ `memory_inbox_event`（按坐标 DELETE） | Job 行随删除消失，业务表由删除链路另行清除（第十七章） |
@@ -728,7 +728,7 @@ flowchart LR
 
 ### 15.4 死信重放（replay）
 
-`POST /api/v1/admin/dlq/replay`（`job_type=INGESTION`，DLQ 专用鉴权）：
+`POST /admin/dlq/replay`（`job_type=INGESTION`，DLQ 专用鉴权）：
 
 - `FOR UPDATE` 锁 Job → 置 `RECEIVED`、**`attempts=0`**、`available_at=now()`、清锁与错误码；Inbox 置 PROCESSING、`attempts+1`；
 - **审计与重入队同事务**（`admin_access_audit`，action=REPLAY）；

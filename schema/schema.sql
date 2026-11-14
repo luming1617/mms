@@ -365,24 +365,24 @@ CREATE INDEX ix_search_doc_p0_trgm ON memory_search_document_p0 USING gin (conte
 -- 不被支持，只能逐子分区建好后由父表索引聚合；缺任一子分区索引都会退化成全分区顺序扫描。
 -- 上线校验：pg_indexes 中每个子分区都必须存在 _tsv 与 _trgm 两条记录（见 15.2 门禁）。
 
--- 消费幂等
+-- 消费幂等：纯签收簿，行存在即重复；只有 RECEIVED/COMPLETED，无 attempts/租约字段，
+-- 崩溃恢复完全由 Job 状态机 + 租约 + JOB 对账承担（《InboxEvent机制设计》2.2/2.3）
 CREATE TABLE memory_inbox_event (
   consumer_group text NOT NULL,
   event_id uuid NOT NULL,
   topic text NOT NULL,
   partition integer NOT NULL,
   "offset" bigint NOT NULL,
-  status text NOT NULL DEFAULT 'PROCESSING'
-    CHECK (status IN ('PROCESSING','COMPLETED','FAILED')),
-  attempts integer NOT NULL DEFAULT 0,
-  last_error_code text,
+  status text NOT NULL DEFAULT 'RECEIVED'
+    CHECK (status IN ('RECEIVED','COMPLETED')),
   processed_at timestamptz,
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (consumer_group, event_id),
   CHECK (status <> 'COMPLETED' OR processed_at IS NOT NULL)
 );
-CREATE INDEX ix_inbox_stale ON memory_inbox_event (status, updated_at)
-  WHERE status = 'PROCESSING';
+-- COMPLETED 独立保留 7 天，由 Convergence 清理；清理按 updated_at 扫描
+CREATE INDEX ix_inbox_completed ON memory_inbox_event (status, updated_at)
+  WHERE status = 'COMPLETED';
 
 -- 删除屏障
 CREATE TABLE customer_deletion_barrier (
@@ -493,7 +493,7 @@ CREATE TABLE memory_ingestion_job (
   customer_id text NOT NULL,
   source_system text NOT NULL,
   source_event_id text NOT NULL,
-  event_type text NOT NULL,
+  event_type text NOT NULL CHECK (event_type IN ('memory.candidate.v1','memory.extraction.requested.v1')),
   payload_ref jsonb NOT NULL DEFAULT '{}'::jsonb,
   status text NOT NULL CHECK (status IN
     ('RECEIVED','PROCESSING','COMPLETED','RETRY','DEAD_LETTER','CANCELLED')),
@@ -1587,6 +1587,26 @@ CREATE INDEX ix_feedback_customer_created ON memory_feedback (customer_id,create
 
 ALTER TABLE memory_usage_event
   ADD COLUMN matched_views jsonb NOT NULL DEFAULT '{}'::jsonb;
+
+-- >>> mms:upgrade
+-- 2026-11-14: Inbox 收敛为《InboxEvent机制设计》目标形态（纯签收簿）：
+-- 仅 RECEIVED/COMPLETED，删 attempts/last_error_code，清理索引改 COMPLETED 保留期扫描；
+-- ingestion event_type 补枚举 CHECK。旧状态值一律映射 RECEIVED（失败恢复由 Job 侧承担）。
+-- 顺序敏感：先删旧 CHECK（否则 RECEIVED 被旧枚举拒绝），迁移数据后再建新 CHECK。
+ALTER TABLE memory_inbox_event DROP CONSTRAINT IF EXISTS memory_inbox_event_status_check;
+UPDATE memory_inbox_event SET status = 'RECEIVED' WHERE status IN ('PROCESSING','FAILED');
+ALTER TABLE memory_inbox_event ADD CONSTRAINT memory_inbox_event_status_check
+  CHECK (status IN ('RECEIVED','COMPLETED'));
+ALTER TABLE memory_inbox_event ALTER COLUMN status SET DEFAULT 'RECEIVED';
+ALTER TABLE memory_inbox_event DROP COLUMN IF EXISTS attempts;
+ALTER TABLE memory_inbox_event DROP COLUMN IF EXISTS last_error_code;
+DROP INDEX IF EXISTS ix_inbox_stale;
+CREATE INDEX IF NOT EXISTS ix_inbox_completed ON memory_inbox_event (status, updated_at)
+  WHERE status = 'COMPLETED';
+ALTER TABLE memory_ingestion_job DROP CONSTRAINT IF EXISTS memory_ingestion_job_event_type_check;
+ALTER TABLE memory_ingestion_job ADD CONSTRAINT memory_ingestion_job_event_type_check
+  CHECK (event_type IN ('memory.candidate.v1','memory.extraction.requested.v1'));
+-- <<< mms:upgrade
 
 -- ---------------------------------------------------------------------------
 -- >>> mms:upgrade

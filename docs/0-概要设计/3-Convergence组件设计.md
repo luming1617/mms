@@ -1,6 +1,6 @@
 # Convergence（mms-convergence）设计
 
-> 归纳自[《0-总体架构》](0-总体架构.md) 2.1.1（部署架构图与部署组件定义）、[《08-记忆的删除与失效》](../2-详细设计/09-记忆删除与失效.md)（过期清理 / 端到端删除）、[《11-记忆的生命周期与状态机》](../2-详细设计/11-记忆的生命周期与状态机.md)、[《12-记忆检索》](../2-详细设计/12-记忆检索.md)（对账与一致性）。
+> 归纳自[《0-总体架构》](0-总体架构.md) 2.1.1（部署架构图与部署组件定义）、[《08-记忆的删除与失效》](../2-详细设计/09-记忆删除与失效.md)（过期清理 / 端到端删除）、[《11-记忆的生命周期与状态机》](../2-详细设计/12-状态机.md)、[《12-记忆检索》](../2-详细设计/11-记忆检索.md)（对账与一致性）。
 > 姊妹篇见 [1-API组件设计.md](1-API组件设计.md) 与 [2-Worker组件设计.md](2-Worker组件设计.md)（同为部署单元层级总结：API 是"在线门面"，Worker 是"干活的手"，Convergence 是"兜底与收敛的大脑"）。本文按"由浅入深"：先讲定位与为什么，再讲部署形态与共性骨架，然后讲五个职责的顺序与协作，最后逐项展开职责与权衡。
 
 ---
@@ -233,7 +233,7 @@ graph TD
 
 ## 六、状态与枚举速查
 
-本节内联定义本文涉及的枚举（只列本文用到的取值；完整状态机见[《11-记忆的生命周期与状态机》](../2-详细设计/11-记忆的生命周期与状态机.md)与[《2-Worker组件设计》](2-Worker组件设计.md)各 Job 章节）。
+本节内联定义本文涉及的枚举（只列本文用到的取值；完整状态机见[《11-记忆的生命周期与状态机》](../2-详细设计/12-状态机.md)与[《2-Worker组件设计》](2-Worker组件设计.md)各 Job 章节）。
 
 **记忆生命周期（`customer_memory.lifecycle_status`）**：
 
@@ -285,7 +285,7 @@ graph TD
 
 ## 七、职责一：生命周期状态扫描与收敛
 
-生命周期扫描在一个事务里顺序执行一批"状态自动出口"，**每条状态都必须有出口、不依赖人工点击**（状态机设计见[《11-记忆的生命周期与状态机》](../2-详细设计/11-记忆的生命周期与状态机.md)）。逐项：
+生命周期扫描在一个事务里顺序执行一批"状态自动出口"，**每条状态都必须有出口、不依赖人工点击**（状态机设计见[《11-记忆的生命周期与状态机》](../2-详细设计/12-状态机.md)）。逐项：
 
 | # | 动作 | 触发判据 | 效果 |
 |---|---|---|---|
@@ -373,7 +373,7 @@ graph TD
 | 子任务 | 数据来源（表 · 字段） | 过滤条件 | 输出（写回 / 指标） |
 |---|---|---|---|
 | 8.1 VERIFYING 重试 | `memory_deletion_request` r（id, customer_id, approved_by, status, updated_at）+ `customer_deletion_barrier` b（按 customer_id 关联且 b.status='ACTIVE'）；另统计全量 VERIFYING 的 count 与 min(updated_at) | r.status='VERIFYING' 且 r.updated_at < now()-deletion_retry_seconds（300s），ORDER BY r.updated_at LIMIT 10 | 逐条独立事务重放删除执行：成功→请求 COMPLETED、屏障转 COOLING_DOWN（由职责一 #8 收尾）、写 `deletion_tombstone` 与 `memory_deletion_item`(VERIFIED)；失败→保持 VERIFYING；指标 `DELETION_VERIFYING`、`TOMBSTONE_LEDGER_LAG`、`DELETION_RETRY{result}` |
-| 8.2 保留同意删除 | `customer_memory` m（customer_id, lifecycle_status）LEFT JOIN `customer_memory_consent` k（purpose='MEMORY_RETENTION'，取 status/version/expires_at） | m.lifecycle_status∈{ACTIVE,CONFLICTED} 且（k.status∈{DENIED,WITHDRAWN} 或 k.status='GRANTED' 且 k.expires_at<=now()）；快照缺失不入选只告警；入队前事务内 FOR UPDATE 复核 | 删除请求受理：`memory_deletion_request` 新增 RECEIVED（幂等键 retention-consent:{customer}:{version}，source=SYSTEM/CONSENT_WITHDRAWN）+ `customer_deletion_barrier` 置 ACTIVE + `memory_outbox` barrier.changed 事件 + `memory_review_task` DELETION/PENDING（执行仍受审核门控）；指标 retention_consent_deletions |
+| 8.2 保留同意删除 | `customer_memory` m（customer_id, lifecycle_status）LEFT JOIN `customer_memory_consent` k（purpose='MEMORY_RETENTION'，取 status/version/expires_at） | m.lifecycle_status∈{ACTIVE,CONFLICTED} 且（k.status∈{DENIED,WITHDRAWN} 或 k.status='GRANTED' 且 k.expires_at<=now()）；快照缺失不入选只告警；入队前事务内 FOR UPDATE 复核 | 删除请求受理：`memory_deletion_request` 新增 RECEIVED（幂等键 retention-consent:{customer}:{version}，source=SYSTEM/CONSENT_WITHDRAWN）+ `customer_deletion_barrier` 置 ACTIVE + `memory_outbox_event` barrier.changed 事件 + `memory_review_task` DELETION/PENDING（执行仍受审核门控）；指标 retention_consent_deletions |
 | 8.3 墓碑清理 | `deletion_tombstone`（retain_until） | retain_until<=now() | 物理删除到期墓碑（删除专用账号独立连接，`trg_tombstone_purge_guard` 拒绝未到期删除）；指标 tombstones_purged |
 
 ---
@@ -425,9 +425,9 @@ graph TD
 | embedding 租约 | `memory_embedding_job`（status, lease_expires_at） | status='RUNNING' 且 lease_expires_at<=now() | status=RETRY，清 locked_by/locked_at（fix） |
 | ingestion 租约 | `memory_ingestion_job`（status, lease_expires_at） | status='PROCESSING' 且 lease_expires_at<=now() | 同上（fix） |
 | translation 租约 | `memory_translation_job`（status, lease_expires_at） | status='RUNNING' 且 lease_expires_at<=now() | 同上（fix） |
-| outbox 租约 | `memory_outbox`（status, locked_at） | status∈{PENDING,RETRY} 且 locked_at < now()-outbox_lease_seconds（60s） | status=RETRY，清 locked_by/locked_at（fix） |
+| outbox 租约 | `memory_outbox_event`（status, locked_at） | status∈{PENDING,RETRY} 且 locked_at < now()-outbox_lease_seconds（60s） | status=RETRY，清 locked_by/locked_at（fix） |
 | READY 缺向量 | `memory_embedding_job` j + NOT EXISTS `memory_embedding` e（同 customer/memory/model/version/视图键，e.status='READY'）+ EXISTS `customer_memory` m（可索引态）+ EXISTS `memory_search_document` d（同视图键+view_text_hash，d.status='READY'） | j.status='READY' | j.status=PENDING、attempts=0、available_at=now()、清锁（fix） |
-| 死信存量 | `memory_embedding_job` / `memory_translation_job` / `memory_ingestion_job`（status='DEAD_LETTER'）+ `memory_outbox`（status='FAILED'） | 四者计数求和 | observe dead_letter_stock：计 mismatch 不 fix，导致 PARTIAL |
+| 死信存量 | `memory_embedding_job` / `memory_translation_job` / `memory_ingestion_job`（status='DEAD_LETTER'）+ `memory_outbox_event`（status='FAILED'） | 四者计数求和 | observe dead_letter_stock：计 mismatch 不 fix，导致 PARTIAL |
 
 ### 9.2 VECTOR —— 视图/向量一致性
 - 观测各 `view_kind/language` 缺失的 READY 向量（`VIEW_MISSING`）；

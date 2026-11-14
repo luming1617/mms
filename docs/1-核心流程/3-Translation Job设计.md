@@ -183,7 +183,7 @@ FOR UPDATE SKIP LOCKED LIMIT 1
 
 ### 8.1 `memory_translation_job`（任务队列）
 
-表结构定义（方案 23.13.5 / ADR-013）：
+表结构定义（方案 23.13 / ADR-013）：
 
 | 字段 | 类型 | 语义 |
 |---|---|---|
@@ -314,7 +314,7 @@ stateDiagram-v2
 
 | 阶段 | 读写的表 | 说明 |
 |---|---|---|
-| 登记（上游业务事务内） | 写 `memory_translation_job`；读 `customer_memory` + `memory_policy` + `memory_search_document`（主 ORIGINAL / READY 计数）+ `customer_memory_consent`（http） | 同事务还写 `customer_memory`、`memory_evidence`、`memory_search_document`（ORIGINAL+CANONICAL）、`memory_decision`、`memory_outbox`、`memory_embedding_job` 等（第十一节） |
+| 登记（上游业务事务内） | 写 `memory_translation_job`；读 `customer_memory` + `memory_policy` + `memory_search_document`（主 ORIGINAL / READY 计数）+ `customer_memory_consent`（http） | 同事务还写 `customer_memory`、`memory_evidence`、`memory_search_document`（ORIGINAL+CANONICAL）、`memory_decision`、`memory_outbox_event`、`memory_embedding_job` 等（第十一节） |
 | 认领/重试/死信/重放 | 仅 `memory_translation_job` | 只改任务行自身的状态/租约/attempts（第四、十二节） |
 | 读源文本 | 读 `memory_search_document`（ORIGINAL + `source_view_hash` + READY） | 只读（5.1） |
 | 外呼前闸门（只读治理表） | `customer_deletion_barrier`（advisory 锁 + 快照）、`customer_memory`、`customer_memory_consent` | Worker 只读不写（5.2） |
@@ -442,7 +442,7 @@ flowchart TD
 
 ### 12.4 死信重放（replay）
 
-`POST /api/v1/admin/dlq/replay`（`job_type=TRANSLATION`，DLQ 专用鉴权：内部服务令牌或管理面凭据）：
+`POST /admin/dlq/replay`（`job_type=TRANSLATION`，DLQ 专用鉴权：内部服务令牌或管理面凭据）：
 
 - **仅当 `status='DEAD_LETTER'`** 时置 `PENDING`、`attempts=0`、`available_at=now()`、清锁与错误码；未命中返回 404（与摄取 replay 不限当前状态不同，这里更严格）；
 - **审计与重入队同事务**（`admin_access_audit`，action=REPLAY，scope 含 plane=DLQ/job_type/job_id，客户 keyed hash）；
