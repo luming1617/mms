@@ -82,7 +82,7 @@ flowchart TD
 
 两个事务边界是理解全链路的关键：**事务①只保证"事件已持久化"，事务②才产生业务事实**。事务②失败回滚时，Job 回到 RETRY，Inbox 绝不标记完成。
 
-**关键步骤（S1–S7）**：编号与 [《Worker组件设计》](../0-概要设计/2-Worker组件设计.md) 3.1 能力矩阵、3.2 执行顺序图一一对应；S8 起由 Embedding / Translation / Outbox Job 与横切治理承载，见对应设计文档。
+**关键步骤（S1–S7）**：编号与 [《Worker组件设计》](../0-概要设计/3-Worker组件设计.md) 3.1 能力矩阵、3.2 执行顺序图一一对应；S8 起由 Embedding / Translation / Outbox Job 与横切治理承载，见对应设计文档。
 
 | 步骤 | 关键步骤 | 说明 | 详见 |
 |---|---|---|---|
@@ -245,7 +245,7 @@ CANONICAL 视图的规范句由结构化事实按注册表模板**确定性生�
 
 ### 7.3 版本升级与重标准化（RENORMALIZE）
 
-normalizer 版本升级时，由 Convergence 扫描落后于 ACTIVE 版本的记忆触发 RENORMALIZE，Worker 执行：原地重算规范化列、置 STALE 重建 CANONICAL/TRANSLATED 视图；**不新建版本、不写决策**，重建向量以 BACKFILL 优先级（500）执行（见 [《Worker组件设计》](../0-概要设计/2-Worker组件设计.md) 3.1 S18、[Convergence组件设计](../0-概要设计/3-Convergence组件设计.md)）。
+normalizer 版本升级时，由 Convergence 扫描落后于 ACTIVE 版本的记忆触发 RENORMALIZE，Worker 执行：原地重算规范化列、置 STALE 重建 CANONICAL/TRANSLATED 视图；**不新建版本、不写决策**，重建向量以 BACKFILL 优先级（500）执行（见 [《Worker组件设计》](../0-概要设计/3-Worker组件设计.md) 3.1 S18、[Convergence组件设计](../0-概要设计/4-Convergence组件设计.md)）。
 
 ---
 
@@ -783,7 +783,7 @@ sequenceDiagram
 
 ## 十八、调度与自愈
 
-Ingestion Worker 自身不做周期扫描，兜底由 Convergence 侧承担（由 `mms-lifecycle` 进程驱动，见 [Convergence组件设计.md](../0-概要设计/3-Convergence组件设计.md)）：
+Ingestion Worker 自身不做周期扫描，兜底由 Convergence 侧承担（由 `mms-lifecycle` 进程驱动，见 [Convergence组件设计.md](../0-概要设计/4-Convergence组件设计.md)）：
 
 - **超租约回收**（JOB 对账 / `ingestion_lease` 修复项）：`PROCESSING` 且 `lease_expires_at<=now()` → 置 `RETRY`、清锁。claim 语句也能直接回收超租行，对账是双保险。
 - **死信存量上报**：`dead_letter_stock` 合并统计三表 DEAD_LETTER + Outbox FAILED，作为运维队列配告警。

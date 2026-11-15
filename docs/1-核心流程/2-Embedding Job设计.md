@@ -68,7 +68,7 @@ flowchart TD
 - **登记事务**（上游业务事务）：记忆 + 视图 + 决策 + Outbox + Embedding Job 一起提交——"事实生效"与"任务存在"原子；
 - **终写事务**（Worker 每条 Job 一个短事务）：屏障再校验 + 归属校验 + 条件写向量 + Job 置 READY 一起提交——"向量可见"与"任务完成"原子。provider 调用发生在两个事务**之间**，不持有任何长事务锁。
 
-**关键步骤（S8–S10）**：编号与 [《Worker组件设计》](../0-概要设计/2-Worker组件设计.md) 3.1 能力矩阵、3.2 执行顺序图一一对应；S1–S7 由 Ingestion Job 承载（见 [Ingestion Job设计](1-Ingestion%20Job设计.md)），S11–S16 由 Translation / Outbox Job 承载，S17–S18 为横切治理。认领、退避重试、死信重放等共性机制由共性执行骨架包裹（《Worker组件设计》第四章），不单列为步骤。
+**关键步骤（S8–S10）**：编号与 [《Worker组件设计》](../0-概要设计/3-Worker组件设计.md) 3.1 能力矩阵、3.2 执行顺序图一一对应；S1–S7 由 Ingestion Job 承载（见 [Ingestion Job设计](1-Ingestion%20Job设计.md)），S11–S16 由 Translation / Outbox Job 承载，S17–S18 为横切治理。认领、退避重试、死信重放等共性机制由共性执行骨架包裹（《Worker组件设计》第四章），不单列为步骤。
 
 | 步骤 | 关键步骤 | 说明 | 详见 |
 |---|---|---|---|
@@ -571,7 +571,7 @@ sequenceDiagram
 
 ## 十五、调度与自愈
 
-Embedding Worker 自身不做周期扫描，兜底由 Convergence 侧承担（由 `mms-lifecycle` 进程驱动，每 300s 依次触发 `JOB/VECTOR/RECALL/BUSINESS` 对账，各写一行 `recon_run`；也可 `POST /internal/reconciliation/{type}` 手动触发。见 [Convergence组件设计.md](../0-概要设计/3-Convergence组件设计.md)）。
+Embedding Worker 自身不做周期扫描，兜底由 Convergence 侧承担（由 `mms-lifecycle` 进程驱动，每 300s 依次触发 `JOB/VECTOR/RECALL/BUSINESS` 对账，各写一行 `recon_run`；也可 `POST /internal/reconciliation/{type}` 手动触发。见 [Convergence组件设计.md](../0-概要设计/4-Convergence组件设计.md)）。
 
 **JOB 对账**：
 

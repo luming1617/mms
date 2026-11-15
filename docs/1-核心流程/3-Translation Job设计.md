@@ -64,7 +64,7 @@ flowchart TD
 - **登记事务**（上游业务事务）：记忆 + ORIGINAL/CANONICAL 视图 + 决策 + Outbox + Translation Job 一起提交——"事实生效"与"任务存在"原子；
 - **终写事务**（Worker 每条 Job 一个短事务）：屏障再校验 + 归属校验 + 预算再校验 + 写译文视图 + 级联登记向量任务 + Job 置 READY 一起提交——"译文可见"与"任务完成"原子。provider 调用发生在两个事务**之间**，不持有任何长事务锁。
 
-**关键步骤（S11–S13）**：编号与 [《Worker组件设计》](../0-概要设计/2-Worker组件设计.md) 3.1 能力矩阵、3.2 执行顺序图一一对应；登记由 S7 承载（Ingestion Job / 同步写路径的业务事务，见第十一节），认领/重试/死信/对账等由共性执行骨架与 Convergence 承载（第四、十二、十五节），不占步骤编号。
+**关键步骤（S11–S13）**：编号与 [《Worker组件设计》](../0-概要设计/3-Worker组件设计.md) 3.1 能力矩阵、3.2 执行顺序图一一对应；登记由 S7 承载（Ingestion Job / 同步写路径的业务事务，见第十一节），认领/重试/死信/对账等由共性执行骨架与 Convergence 承载（第四、十二、十五节），不占步骤编号。
 
 | 步骤 | 关键步骤 | 说明 | 详见 |
 |---|---|---|---|
@@ -520,7 +520,7 @@ sequenceDiagram
 
 ## 十五、调度与自愈
 
-Translation Worker 自身不做周期扫描，兜底由 Convergence 侧承担（JOB 对账由 `mms-lifecycle` 进程驱动，成本淘汰由 `mms-view-cost` 进程驱动，见 [Convergence组件设计.md](../0-概要设计/3-Convergence组件设计.md)）：
+Translation Worker 自身不做周期扫描，兜底由 Convergence 侧承担（JOB 对账由 `mms-lifecycle` 进程驱动，成本淘汰由 `mms-view-cost` 进程驱动，见 [Convergence组件设计.md](../0-概要设计/4-Convergence组件设计.md)）：
 
 - **超租约回收**（JOB 对账 / `translation_lease` 修复项）：`RUNNING` 且 `lease_expires_at<=now()` → 置 `RETRY`、清锁。claim 语句也能直接回收超租行，对账是双保险。
 - **死信存量上报**：`dead_letter_stock` 合并统计三张 Job 表 DEAD_LETTER + Outbox FAILED，作为运维队列配告警。

@@ -2,18 +2,18 @@
 
 ## 一、一句话认识 API
 
-系统里所有"请求驱动、必须在线同步给出结果"的工作——检索记忆上下文、受理候选与摄取事件、接收反馈纠正、审核决策、受理删除请求、同步同意快照、管理面运维——都只经过 **API 进程**这一个在线入口。耗时且不能阻塞在线主流程的工作（文档向量、翻译、事件外发）不在请求里做完，而是在同一个 PostgreSQL 事务里落 Job/Outbox 记录，交给 Worker 异步执行；没有天然触发时机的收敛工作交给 Convergence。
+系统里所有"请求驱动、必须在线同步给出结果"的工作——检索记忆上下文、受理候选与摄取事件、接收反馈纠正、审核决策、受理删除请求、同步同意快照、管理面运维——都只经过 **API 进程**这一个在线入口。耗时且不能阻塞在线主流程的工作（文档向量、事件外发）不在请求里做完，而是在同一个 PostgreSQL 事务里落 Job/Outbox 记录，交给 Worker 异步执行；没有天然触发时机的收敛工作交给 Convergence。
 
 ---
 
 ## 二、为什么 API 只做"门面"
 
-这是"去掉中间件、一个库一个事务边界"架构决策（见[《0-总体架构》](0-总体架构.md)）在在线侧的延续：
+这是"去掉中间件、一个库一个事务边界"架构决策（见[《0-总体架构》](1-总体架构.md)）在在线侧的延续：
 
-1. **在线预算必须闭合**：默认档 P95 ≤300ms，预算求和 `20 + 50 + max(96,50) + 30 = 196ms`（[《12-记忆检索》](../2-详细设计/11-记忆检索.md) 12.15）。提取、文档向量、翻译、事件外发任何一个放进请求都会击穿预算——它们全部异步化，热路径只保留"查询向量 + 召回 + 可选 rerank"。
+1. **在线预算必须闭合**：默认档 P95 ≤300ms，预算求和 `20 + 50 + max(96,50) + 30 = 196ms`（[《12-记忆检索》](../2-详细设计/11-记忆检索.md) 12.15）。提取、文档向量、事件外发任何一个放进请求都会击穿预算——它们全部异步化，热路径只保留"查询向量 + 召回 + 可选 rerank"。跨语言召回由多语言向量模型承担；可选的查询侧翻译兜底默认关闭。
 2. **一个事务边界**：API 的同步写端点与 Worker 的异步消费**共用同一候选决策实现（同一写入主链）**——业务数据、Job、Outbox 同事务提交，在线/离线两条写路径行为一致，不会漂移出两套决策逻辑。
 3. **无状态才能水平扩容**：配额、屏障、同意、业务状态全部在 PG；进程内只有可重建缓存与每副本独立的限流桶，任意副本可杀可加。
-4. **合规闸必须前置在入口**：customer_id 只由网关注入；同意/屏障/审计在读写发生**之前**判定，fail-closed。入口集中，闸才集中。
+4. **合规闸必须前置在入口**：customer_id 随请求传入，必须校验在 API 密钥的授权范围内（终端用户身份不进入 MMS）；同意/屏障/审计在读写发生**之前**判定，fail-closed。入口集中，闸才集中。
 
 一句话：**API 把"在线必须做的事"做薄，把"可以稍后做的事"全部落到同一个事务里的队列上**。
 
@@ -75,7 +75,7 @@
 | 错误码 | HTTP | 含义 |
 |---|---|---|
 | `AUTH_FAILED` | 401 | 凭证缺失或无效 |
-| `CUSTOMER_MISMATCH` | 403 | body 携带的 customer_id 与网关身份不一致 |
+| `CUSTOMER_MISMATCH` | 403 | 请求携带的 customer_id 不在 API 密钥授权范围内 |
 | `ADMIN_REASON_REQUIRED` | 403 | 管理操作缺少理由码/工单号 |
 | `CONSENT_REQUIRED` / `CONSENT_WITHDRAWN` | 403 | 同意缺失 / 已撤回（写路径） |
 | `VALIDATION_FAILED` | 422 | 参数校验失败 |
@@ -89,10 +89,10 @@
 | `CONSENT_UNAVAILABLE` | 503 | 同意快照不可用（fail-closed） |
 | `AUDIT_WRITE_FAILED` | 503 | 审计写失败，拒绝操作 |
 | `BARRIER_CHECK_FAILED` | 503 | 屏障校验异常，事务回滚 |
-| `EMBEDDING_UNAVAILABLE` | 503 | 查询向量化不可用 |
 | `INTERNAL` | 500 | 内部错误 |
 
 > 读路径的同意拒绝不走错误码：返回空结果 + consent 标志，不泄露记忆是否存在（见第八章）。
+> **查询向量化不可用不是错误**：超时/失败立即降级为纯关键词匹配并计数（需求 §5.1 硬要求，见第九章），不返回 503、不重试、不等待。
 
 ---
 
@@ -100,33 +100,32 @@
 
 ### 5.1 调用方分类
 
-MMS 的业务调用方分两大类——**前台用户**与**后台运营**（客服坐席 + 管理维护），二者是两个独立部署的上游服务，经不同认证面接入；另有服务间内部调用与基础设施调用：
+**MMS 不直接面向 C 端用户**，只有两个认证面（《0-需求与规模假设》§一）：**agent 服务面**与**管理面**，凭证完全独立、不混用。
 
 | 调用方 | 是谁 | 认证面 |
 |---|---|---|
-| 前台用户 | 用户前台（客服 Agent / 回答服务），代表终端用户发起检索、写入、反馈、删除 | 客户面 |
-| 后台运营 · 客服坐席 | 客服工作台，查看被授权客户的记忆摘要 | 坐席面 |
-| 后台运营 · 管理维护 | 运营后台（审核台 / 运营工作台）：审核、政策、重建、回放、审计读取、运维触发 | 管理面（运维触发端点走内部面） |
-| 内部服务 | 上游同意权威系统、身份服务、事件投递方（权威业务系统/事件网关） | 内部面 |
+| agent 主服务（可多个） | 独立部署的 agent 服务，代表客户发起检索、写入、反馈、删除 | agent 服务面 |
+| 上游服务 | 权威业务系统/事件网关（事件投递）、同意权威系统（同意同步）、身份服务（identity-ref） | agent 服务面（服务身份密钥，与 agent 同面不同密钥） |
+| 运营后台 | 审核台 / 运营工作台：审核、政策、重建、回放、审计读取、运维触发、客户记忆查看 | 管理面 |
 | 基础设施 | 容器探针、监控采集 | 内网直连，无业务凭证 |
 
-### 5.2 四个认证面（凭证不混用）
+### 5.2 两个认证面（凭证不混用）
 
 | 面 | 凭证 | 身份来源 | 服务的调用方与能力 |
 |---|---|---|---|
-| 客户面 | `X-Service-Token` + 网关注入 `X-Customer-ID` | 网关 JWT/身份服务映射 | 前台用户：检索/候选/提取/反馈/用量/删除 |
-| 坐席面 | `X-Service-Token` + `X-Agent-ID` | `agent_customer_grant` 授权表交叉校验 | 后台运营 · 客服坐席：客户记忆摘要列表 |
-| 管理面 | `X-Admin-Token` + `X-Reviewer-ID` + `X-Admin-Reason-Code` + `X-Admin-Ticket` + `X-Admin-Role` | 角色白名单（见 5.4） | 后台运营 · 管理维护：审核/政策/事实键/重建/lineage/决策回放/AUDIT 读取 |
-| 内部面 | `X-Service-Token` | 服务身份 | 内部服务：摄取/同意同步/identity-ref；运维触发：手动对账/视图成本/容量 |
+| agent 服务面 | API 密钥（`X-API-Key`，一服务一把、可动态配置）+ 请求携带 `X-Customer-Id` | 密钥注册表：密钥 → 服务身份 + 客户授权范围 + 能力位 | agent 主服务：检索/候选/提取/反馈/用量/删除；上游服务：事件摄取/同意同步/identity-ref |
+| 管理面 | 运营 JWT（登录服务签发，MMS 只校验）+ `X-Admin-Reason-Code` + `X-Admin-Ticket` | JWT 携带操作员账号与角色，角色白名单校验（见 5.4） | 运营后台：审核/政策/事实键/重建/lineage/决策回放/AUDIT 读取/运维触发/客户记忆查看 |
+
+- **客户号范围校验**：`X-Customer-Id` 必须在该密钥的客户授权范围内，越界即 403 `CUSTOMER_MISMATCH`；终端用户身份不进入 MMS。
+- **密钥能力位**：agent 密钥只开放业务读写能力；摄取/同意同步/identity-ref 能力仅授予对应上游服务的密钥，agent 密钥默认不具备。
 
 ### 5.3 鉴权与授权规则
 
-- **token 物理分离**：管理面 admin token 与客户面 service token 物理分离、不混用；政策变更再要求角色 ∈ 政策管理角色集（见 5.4）。
-- **customer_id 只由网关注入**：body 重复携带 customer_id 且与网关身份不一致 → 403 `CUSTOMER_MISMATCH`；path 里的 customer_id 只是"请求目标"，不是授权凭据。
-- **坐席授权交叉校验**：坐席读取客户摘要前校验坐席-客户授权关系，granted/denied 都先写审计；审计写失败 503 拒读。
-- **管理操作留痕**：管理面访问客户数据必须携带理由码 + 工单号；`AUDIT`/`as_of` 读取必须管理面凭证，**读前同事务写审计，写失败 503 拒读**（fail-closed）。
-- **DLQ 重放双通道**：内部面或管理面凭证均可，均同事务审计。
-- **审核域走管理面**：审核台属运营后台，审核队列与审核决策使用管理面凭证（审核人身份 + 4-eyes）。
+- **凭证物理分离**：API 密钥与运营 JWT 物理分离、不混用；政策变更再要求角色 ∈ 政策管理角色集（见 5.4）。
+- **customer_id 只做范围校验**：请求携带的 customer_id 不在密钥授权范围内 → 403 `CUSTOMER_MISMATCH`；path 里的 customer_id 只是"请求目标"，不是授权凭据。
+- **管理操作留痕**：管理面访问客户数据必须携带理由码 + 工单号；`AUDIT`/`as_of` 读取必须管理面凭证，**读前同事务写审计，写失败 503 拒读**（fail-closed）。运营查看客户记忆摘要同样读前审计。
+- **DLQ 重放走管理面**：同事务审计，写失败重放不生效。
+- **审核域走管理面**：审核台属运营后台，审核队列与审核决策使用运营 JWT（审核人身份 + 4-eyes）。
 
 ### 5.4 管理角色枚举
 
@@ -158,7 +157,7 @@ MMS 的业务调用方分两大类——**前台用户**与**后台运营**（�
 
 - 按 `X-Customer-ID` 建桶（缺省回退 client IP）；默认 50 请求/秒、突发 100；
 - **每副本独立预算**：总限流预算 = 单副本预算 × 副本数，扩容会放大总预算，容量规划必须计入；
-- 跳过 `/health`、`/metrics`、`/internal`（内部面是服务间受控调用，预算由调用方与配额管理）；
+- 跳过 `/health`、`/metrics`、`/internal`（`/internal` 为上游服务受控调用，预算由调用方与配额管理）；
 - 在中间件层拒绝，不进入路由、不产生路由级指标。
 
 ### 6.3 配额（DB 共享预算）
@@ -170,7 +169,7 @@ MMS 的业务调用方分两大类——**前台用户**与**后台运营**（�
 | `WRITE` | 每客户每日 | 2000 | 写入决策时计数 |
 | `EXTRACTION` | 每客户每日 | 2000 | 提取受理**先扣再调提取器** |
 | `EMBEDDING` | 每客户每日 | 20000 | 决策事务内复查 |
-| `ACTIVE_MEMORIES` | 存量记忆条数 | 5000 | 决策事务内复查 |
+| `ACTIVE_MEMORIES` | 存量记忆条数 | 1000 | 决策事务内复查（产品硬上限，需求 §4.1） |
 
 - **原子自增后判定**，超限 429 `QUOTA_EXCEEDED`；
 - 提取端点先扣 `EXTRACTION` 再调提取器——配额耗尽的客户不能继续烧 provider；
@@ -190,21 +189,20 @@ MMS 的业务调用方分两大类——**前台用户**与**后台运营**（�
 | purpose | 含义 | `as_of` | 说明 |
 |---|---|---|---|
 | `CURRENT_ANSWER` | 当前回答（默认） | 不允许 | 事实通道只取 ACTIVE，CONFLICTED 走独立待核实通道 |
-| `CUSTOMER_SELF_SERVICE` | 客户自助 | 不允许 | 仅 policy 白名单类型，中/高敏感脱敏 |
 | `HISTORY_DEBUG` | 历史调试 | 允许 | 可召回 RESOLVED/SUPERSEDED/EXPIRED 等历史状态 |
 | `AUDIT` | 审计 | 允许 | 必须管理面凭证，读前审计 |
 
-> `CANDIDATE_DISCOVERY` 是决策引擎内部用途，不接受外部传入。purpose 由服务端强制映射状态集，调用方不能自选状态集。
+> `CANDIDATE_DISCOVERY` 是决策引擎内部用途，不接受外部传入。purpose 由服务端强制映射状态集，调用方不能自选状态集。MMS 不直接面向 C 端用户，不设客户自助用途；面向终端用户的展示与脱敏由 agent 侧负责。
 
 | 端点 | 调用方 | 用途 | 关键口径 |
 |---|---|---|---|
-| `POST /memories/query` | 前台用户 | 语义+词法+精确过滤检索 | 客户面；purpose 服务端映射；`as_of` 仅 HISTORY_DEBUG/AUDIT |
-| `POST /agent/memory-context` | 前台用户（客服 Agent） | Agent 注入式上下文 | 客户面；扁平 `memory_context` + `instruction_boundary` + `trust=untrusted_data`；原检索信封下移 `retrieval` |
-| `GET /customers/{id}/memories` | 后台运营 · 客服坐席 | 坐席查看客户记忆摘要 | 坐席面；grant 交叉校验 + 审计前置；cursor 分页；脱敏摘要（160 字符） |
+| `POST /memories/query` | agent 主服务 | 语义+词法+精确过滤检索 | agent 服务面；purpose 服务端映射；`as_of` 仅 HISTORY_DEBUG/AUDIT |
+| `POST /agent/memory-context` | agent 主服务 | Agent 注入式上下文 | agent 服务面；响应固定两段：`profile`（客户画像，v1 恒空、v1.5 填充，调用方无需改代码）+ `memory_context` 明细；`instruction_boundary` + `trust=untrusted_data` 不变；原检索信封下移 `retrieval` |
+| `GET /customers/{id}/memories` | 运营后台 | 运营查看客户记忆摘要 | 管理面；读前同事务审计；cursor 分页；脱敏摘要（160 字符） |
 
 ### 7.2 写入域（同步决策 / 异步摄取）
 
-**设计口径：两类摄取统一入队、Ingestion Worker 统一消费，两条路径仅差提取方**——路径 A 由本系统提取会话原文，路径 B 由投递方提前提取候选。受理只做"过闸 + 落 Job"，202 + job_id 即返回；提取与决策由 Worker 异步完成，与同步写端点共用同一写入主链。`candidates`/`feedback`/`review` 三个用户在场的入口保留同步决策：即时反馈、审核批准与业务写入同事务原子；摄取队列 FIFO 无纠正优先级，纠正入队会排在批量摄取之后。详见[《Ingestion Job 设计》](../1-核心流程/1-Ingestion%20Job设计.md)第二十二节。
+**设计口径：两类摄取统一入队、Ingestion Worker 统一消费，两条路径仅差提取方**——路径 A 由本系统提取会话原文，路径 B 由投递方提前提取候选。受理只做"过闸 + 落 Job"，202 + job_id 即返回；提取与决策由 Worker 异步完成，与同步写端点共用同一写入主链。`candidates`/`feedback`/`review` 三个需要即时结果的入口保留同步决策：即时反馈、审核批准与业务写入同事务原子；**摄取队列支持纠正插队（CORRECTION 优先级），用户纠正排在批量摄取之前**（需求 §5.2：纠正 → 可被查 P95 ≤30s / P99 ≤120s）。详见[《Ingestion Job 设计》](../1-核心流程/1-Ingestion%20Job设计.md)第二十二节。
 
 事件类型（event_type）枚举：
 
@@ -215,10 +213,10 @@ MMS 的业务调用方分两大类——**前台用户**与**后台运营**（�
 
 | 端点 | 调用方 | 用途 | 关键口径 |
 |---|---|---|---|
-| `POST /memories/candidates` | 前台用户 | 单候选同步决策 | 客户面；与 Worker 共用同一写入主链；202 返回决策结果 |
-| `POST /extractions` | 前台用户 | 会话提取受理（异步） | 客户面；受理落 Job，202 + job_id；先扣 EXTRACTION 配额；Worker 取数→提取→逐候选决策 |
-| `POST /internal/ingestion/events` | 内部服务（上游业务系统/事件网关） | 候选事件异步摄取 | 内部面；topic 白名单；Inbox+Job 双账本同事务；202 + job_id |
-| `GET /internal/ingestion/jobs/{id}` | 前台用户 / 后台运营 · 管理维护 | 摄取任务状态查询 | 内部面；状态/attempts/last_error_code |
+| `POST /memories/candidates` | agent 主服务 | 单候选同步决策 | agent 服务面；与 Worker 共用同一写入主链；202 返回决策结果；**P95 ≤500ms 预算（问题转向量 150 + 查重查找 150 + 决策写库 100 + 合规与打包 100），不含大模型调用——候选必须已带规范句，没带转异步**（需求 §5.1） |
+| `POST /extractions` | agent 主服务 | 会话提取受理（异步） | agent 服务面；受理落 Job，202 + job_id；先扣 EXTRACTION 配额；Worker 取数→提取→逐候选决策 |
+| `POST /internal/ingestion/events` | 上游服务（业务系统/事件网关） | 候选事件异步摄取 | agent 服务面（摄取能力位密钥）；topic 白名单；Inbox+Job 双账本同事务；202 + job_id |
+| `GET /internal/ingestion/jobs/{id}` | agent 主服务 / 运营后台 | 摄取任务状态查询 | agent 服务面或管理面；状态/attempts/last_error_code |
 
 关键设计点：
 
@@ -228,7 +226,7 @@ MMS 的业务调用方分两大类——**前台用户**与**后台运营**（�
 - **Job 状态枚举**：`PENDING` / `RUNNING` / `READY` / `RETRY` / `DEAD_LETTER` / `CANCELLED`。
 - **topic 白名单**：默认 `memory-candidates`（可配置）。
 
-### 7.3 反馈与用量域（客户面）
+### 7.3 反馈与用量域（agent 服务面）
 
 反馈类型（feedback_type）枚举：
 
@@ -243,8 +241,8 @@ MMS 的业务调用方分两大类——**前台用户**与**后台运营**（�
 
 | 端点 | 调用方 | 用途 | 关键口径 |
 |---|---|---|---|
-| `POST /memories/{id}/feedback` | 前台用户 | 反馈/纠正 | Idempotency-Key 必需；INCORRECT 必须带 correction；纠正走决策引擎 |
-| `POST /memory-usage` | 前台用户 | 回报实际采用的记忆 | request_id 关联检索 trace；answer_hash 校验 |
+| `POST /memories/{id}/feedback` | agent 主服务 | 反馈/纠正 | Idempotency-Key 必需；INCORRECT 必须带 correction；纠正走决策引擎 |
+| `POST /memory-usage` | agent 主服务 | 回报实际采用的记忆 | request_id 关联检索 trace；answer_hash 校验 |
 
 ### 7.4 审核域（管理面）
 
@@ -252,23 +250,23 @@ MMS 的业务调用方分两大类——**前台用户**与**后台运营**（�
 
 | 端点 | 调用方 | 用途 | 关键口径 |
 |---|---|---|---|
-| `GET /review-queue` | 后台运营 · 管理维护（审核台） | 待审列表 | MEMORY_READ 同意闸（拒绝降级为空队列）；cursor 分页 |
-| `POST /review-queue/{id}/decision` | 后台运营 · 管理维护（审核人） | 审核决策 | `decision_version` 乐观锁；4-eyes（批准人≠提交人）；批准即执行（与业务写入同事务） |
+| `GET /review-queue` | 运营后台（审核台） | 待审列表 | MEMORY_READ 同意闸（拒绝降级为空队列）；cursor 分页 |
+| `POST /review-queue/{id}/decision` | 运营后台（审核人） | 审核决策 | `decision_version` 乐观锁；4-eyes（批准人≠提交人）；批准即执行（与业务写入同事务） |
 
-### 7.5 删除域（客户面）
+### 7.5 删除域（agent 服务面）
 
 | 端点 | 调用方 | 用途 | 关键口径 |
 |---|---|---|---|
-| `POST /deletion-requests` | 前台用户（终端用户经前台发起） | 请求全量删除 | Idempotency-Key 必需；scope 仅 `{all:true}`；建屏障+审核任务 |
-| `GET /deletion-requests/{id}` | 前台用户 | 删除状态/证明 | `proof` 字段随状态返回 |
+| `POST /deletion-requests` | agent 主服务（代表客户发起） | 请求全量删除 | Idempotency-Key 必需；scope 仅 `{all:true}`；建屏障；**客户自助删除自动批准，不等待人工**（需求 §5.2）；运营发起的删除才建审核任务 |
+| `GET /deletion-requests/{id}` | agent 主服务 | 删除状态/证明 | `proof` 字段随状态返回 |
 
 删除请求状态枚举：`RECEIVED` → `APPROVED` → `IN_PROGRESS` → `VERIFYING` → `COMPLETED`；分支终态 `REJECTED` / `CANCELLED`。
 
 删除屏障状态枚举：`ACTIVE`（删除进行中）/ `COOLING_DOWN`（冷却收尾）/ `COMPLETED`（完成）/ `CANCELLED`（重新授权撤销）。
 
-删除审核批准由后台运营 · 管理维护执行（见 7.4）；冷却收尾与墓碑清理归 Convergence（见第十一章）；撤回触发的删除同走此链路（见[《03-记忆授权与撤回》](../2-详细设计/03-记忆授权.md) 3.4）。
+**批准口径（需求 §5.2）**：客户自助删除（agent 代表客户发起，密钥范围已校验）与同意撤回触发的删除**自动批准**；运营侧发起的删除由运营后台 4-eyes 审核（见 7.4）。任何删除**批准 → 执行完成、出证明 ≤7 天**，超时触发 `MMSDeletionDeadlineBreach`（page）。冷却收尾与墓碑清理归 Convergence（见第十一章）；撤回触发的删除同走此链路（见[《03-记忆授权与撤回》](../2-详细设计/03-记忆授权.md) 3.4）。
 
-### 7.6 同意与身份域（内部面）
+### 7.6 同意与身份域（agent 服务面 · 上游服务密钥）
 
 同意用途（purpose）枚举：
 
@@ -279,32 +277,36 @@ MMS 的业务调用方分两大类——**前台用户**与**后台运营**（�
 | `MEMORY_RETENTION` | 允许留存记忆 |
 | `SENSITIVE_MEMORY` | 允许处理中/高敏感记忆 |
 | `CROSS_BORDER_EMBEDDING` | 允许跨境向量化通道 |
-| `CROSS_BORDER_TRANSLATION` | 允许跨境翻译通道 |
+| `CROSS_BORDER_TRANSLATION` | 允许跨境查询翻译通道（查询侧兜底，可选；不翻译、不存储记忆译文） |
 | `CROSS_BORDER_RERANK` | 允许跨境重排通道 |
 
 同意状态枚举：`GRANTED`（已授权）/ `DENIED`（拒绝）/ `WITHDRAWN`（撤回）。
 
 | 端点 | 调用方 | 用途 | 关键口径 |
 |---|---|---|---|
-| `GET/POST /internal/customers/{id}/memory-consent` | 内部服务（同意权威系统） | 同意快照读取/同步 | 版本单调；GRANTED 翻屏障；WITHDRAWN 视同删除请求（见[《03-记忆授权与撤回》](../2-详细设计/03-记忆授权.md) 3.4） |
-| `GET/POST /internal/customers/{id}/identity-ref` | 内部服务（身份服务/事件投递方） | `customer_ref` 读取/预置 | Kafka 假名（HMAC），幂等 |
+| `GET/POST /internal/customers/{id}/memory-consent` | 上游服务（同意权威系统） | 同意快照读取/同步 | 版本单调；GRANTED 翻屏障；WITHDRAWN 视同删除请求（见[《03-记忆授权与撤回》](../2-详细设计/03-记忆授权.md) 3.4） |
+| `GET/POST /internal/customers/{id}/identity-ref` | 上游服务（身份服务/事件投递方） | `customer_ref` 读取/预置 | Kafka 假名（HMAC），幂等 |
 
 ### 7.7 管理域（管理面 + 同事务审计）
 
 政策操作（action）枚举：`CREATE`（创建草稿）/ `ACTIVATE`（激活）/ `ROLLBACK`（回滚）。
 
-死信队列类型（job_type）枚举：`INGESTION` / `OUTBOX` / `EMBEDDING` / `TRANSLATION`。
+死信队列类型（job_type）枚举：`INGESTION` / `OUTBOX` / `EMBEDDING`（v1.5 增 `PROFILE`）。
 
 | 端点 | 调用方 | 用途 | 关键口径 |
 |---|---|---|---|
-| `GET/POST /admin/policies` | 后台运营 · 管理维护 | 政策列表/创建/激活/回滚 | 4-eyes（批准人≠创建人）；单 ACTIVE 约束 |
-| `GET /admin/fact-keys` | 后台运营 · 管理维护 | 事实键注册表 | 只读 |
-| `POST /admin/embeddings/rebuild` | 后台运营 · 管理维护 | 向量重建/回填 | 必须限定客户或记忆；**只登记 Job，Worker 执行** |
-| `POST /admin/decisions/replay` | 后台运营 · 管理维护 | 决策回放 | 钉住 policy/registry 版本重放规则矩阵 |
-| `GET /admin/memories/{id}/lineage` | 后台运营 · 管理维护 | 证据→决策→版本→向量→使用 | 读前审计 |
-| `POST /admin/dlq/replay` | 后台运营 · 管理维护 | 四类队列死信统一重放 | 审计同事务，写失败重放不生效 |
+| `GET/POST /admin/policies` | 运营后台 | 政策列表/创建/激活/回滚 | 4-eyes（批准人≠创建人）；单 ACTIVE 约束 |
+| `GET /admin/fact-keys` | 运营后台 | 事实键注册表 | 只读 |
+| `POST /admin/embeddings/rebuild` | 运营后台 | 向量重建/回填 | 必须限定客户或记忆；**只登记 Job，Worker 执行** |
+| `POST /admin/decisions/replay` | 运营后台 | 决策回放 | 钉住 policy/registry 版本重放规则矩阵 |
+| `GET /admin/memories/{id}/lineage` | 运营后台 | 证据→决策→版本→向量→使用 | 读前审计 |
+| `POST /admin/dlq/replay` | 运营后台 | 三类队列死信统一重放（v1.5 含 PROFILE） | 审计同事务，写失败重放不生效 |
+| `GET/POST /admin/eval-sets` | 运营后台 | 黄金评测集管理 | 真实问题脱敏采样 + 人工标注；季度轮换 20%★防"背题"；按审计口径管理，不进生产检索（需求 §6.3） |
+| `POST /admin/eval-runs` | 运营后台 | 触发离线评测 | 对候选版本（抽取器/归一器/向量模型/决策政策）跑需求 §6.2 指标全集：抽取精确率/召回率（每周抽样 200 条★标注 + 100 段★会话回放）、决策准确率（决策回放 × 标注集）、换说法/跨语言命中率（前 10 条）；结果落评测运行记录 |
 
-### 7.8 内部运维域（内部面）
+**版本启用门禁（需求 §6.3）**：政策激活、模型注册表影子转正式、抽取器/归一器版本切换，都必须引用**通过的评测运行记录**；任一指标破线阻断启用（`MMSEvalGateBreach`）。影子评测覆盖整条决策链，不只挑战向量模型。
+
+### 7.8 运维触发域（管理面）
 
 对账类型（recon_type）枚举：
 
@@ -313,13 +315,13 @@ MMS 的业务调用方分两大类——**前台用户**与**后台运营**（�
 | `JOB` | 任务对账：超租约回收、死信回队 |
 | `VECTOR` | 向量对账：缺向量回填、视图修复 |
 | `BUSINESS` | 业务状态对账：状态与投影一致性 |
-| `RECALL` | 召回体检：canary 采样复用检索 |
+| `RECALL` | 自检探针：原文自召回采样（管道健康，不计质量 SLO，需求 §6.2） |
 
 | 端点 | 调用方 | 用途 | 关键口径 |
 |---|---|---|---|
-| `POST /internal/reconciliation/{type}` | 后台运营 · 管理维护（运维工作台） | 手动触发四类对账 | 执行体与 Convergence 同一实现 |
-| `POST /internal/view-cost/run` | 后台运营 · 管理维护（运维工作台） | 手动触发视图成本回收 | 同上 |
-| `GET /internal/customers/{id}/retrieval-capacity` | 后台运营 · 管理维护（运维工作台） | 单客户检索容量报告 | 只读 |
+| `POST /internal/reconciliation/{type}` | 运营后台（运维工作台） | 手动触发四类对账 | 执行体与 Convergence 同一实现 |
+| `POST /internal/view-cost/run` | 运营后台（运维工作台） | 手动触发视图成本回收 | 同上 |
+| `GET /internal/customers/{id}/retrieval-capacity` | 运营后台（运维工作台） | 单客户检索容量报告 | 只读 |
 
 ### 7.9 健康与指标
 
@@ -327,7 +329,7 @@ MMS 的业务调用方分两大类——**前台用户**与**后台运营**（�
 |---|---|---|---|
 | `GET /health/live` | 基础设施（容器探针） | 进程存活 | 无依赖 |
 | `GET /health/ready` | 基础设施（容器探针） | 硬依赖：主库可写 + pgvector + schema 初始化 | 任一缺失 503，Pod 摘流量 |
-| `GET /health/deps` | 基础设施（运维诊断） | 软依赖：embedding/translation provider、DB、副本 | 不参与 readiness，防 provider 故障摘全站 |
+| `GET /health/deps` | 基础设施（运维诊断） | 软依赖：embedding provider、DB、副本 | 不参与 readiness，防 provider 故障摘全站 |
 | `GET /metrics` | 基础设施（监控采集） | Prometheus 指标 | 与业务同端口 8000（Worker 用独立 metrics 端口） |
 
 ---
@@ -336,9 +338,8 @@ MMS 的业务调用方分两大类——**前台用户**与**后台运营**（�
 
 | 闸 | 判定位置 | 失败/拒绝行为 |
 |---|---|---|
-| 客户身份 | 网关注入 `X-Customer-ID`；body 不一致即拒 | 401 `AUTH_FAILED` / 403 `CUSTOMER_MISMATCH` |
-| 坐席授权 | `agent_customer_grant` 交叉校验，granted/denied 都先审计 | 403；审计写失败 503 拒读 |
-| 管理面 | token + 角色白名单 + reason + ticket | 401/403；AUDIT 读前审计失败 503 |
+| 客户身份 | API 密钥 + `X-Customer-Id` 授权范围校验；越界即拒 | 401 `AUTH_FAILED` / 403 `CUSTOMER_MISMATCH` |
+| 管理面 | 运营 JWT + 角色白名单 + reason + ticket | 401/403；AUDIT 读前审计失败 503 |
 | 屏障（读） | 主库快照 + 5s 缓存 + NOTIFY 失效 | `DELETE_IN_PROGRESS` 409 / `CUSTOMER_DELETED` 410 |
 | 屏障（写） | advisory lock + 主库快照 + 代际/cutover 校验 | 拒绝或 `STALE_GENERATION`；校验异常回滚（`BARRIER_CHECK_FAILED` 503） |
 | 同意（读） | `MEMORY_READ` 主库直查 | 空结果 + consent 标志，不泄露记忆是否存在 |
@@ -360,7 +361,7 @@ MMS 的业务调用方分两大类——**前台用户**与**后台运营**（�
 | `max_request_bytes` | 262144（256KB） | 请求体上限，解析前拒绝 |
 | `rate_limit_enabled` / `rate_limit_requests_per_second` / `rate_limit_burst` | true / 50 / 100 | 进程内令牌桶（每客户，见第六章） |
 | `quota_write_per_day` / `quota_extraction_per_day` | 2000 / 2000 | 每客户每日写入/提取配额（DB 共享） |
-| `quota_embedding_per_day` / `quota_active_memories` | 20000 / 5000 | 向量预算 / 存量记忆上限 |
+| `quota_embedding_per_day` / `quota_active_memories` | 20000 / 1000 | 向量预算 / 存量记忆上限（产品硬上限，需求 §4.1） |
 | `query_cache_ttl_seconds` / `query_cache_max_entries` | 3600 / 4096 | 查询向量缓存（进程内） |
 | `barrier_cache_ttl_seconds` / `barrier_cache_max_entries` | 5 / 4096 | 屏障缓存；TTL 超 5s 拒绝启动 |
 | `read_replica_enabled` / `read_replica_write_hold_seconds` | false / 5 | 读副本开关与写后读主库保持窗 |
@@ -368,7 +369,7 @@ MMS 的业务调用方分两大类——**前台用户**与**后台运营**（�
 | `reranker_enabled` / `rerank_enabled_purposes` / `rerank_top_n` / `reranker_timeout_ms` | false / CURRENT_ANSWER,HISTORY_DEBUG / 20 / 80 | rerank 开关与预算 |
 | `reranker_provider` | external | 非 self-hosted 需 `CROSS_BORDER_RERANK` 同意 |
 | `lexical_enabled_languages` / `lexical_min_query_chars` / `lexical_trgm_threshold` | zh-CN,en-US / 3 / 0.3 | 词法通道 |
-| `embedding_timeout_ms` | 10000 | 查询向量 provider 超时 |
+| `embedding_timeout_ms` | 150 | 查询向量 provider 超时；超时立即降级纯关键词匹配并计 `mms_retrieval_degraded_total`，不重试、不等待（需求 §5.1 硬要求；秒级超时与 300ms 总预算不相容，启动期校验拒绝 >150 的配置） |
 | `admin_roles` / `policy_admin_roles` | ADMIN,POLICY,PRIVACY,OPERATOR,READONLY / ADMIN,POLICY | 管理面角色白名单（见 5.4） |
 | `ingestion_topics` | memory-candidates | 摄取 topic 白名单 |
 | `authority_sync_mode` | async | 同意权威同步模式：异步快照同步 |
@@ -391,6 +392,19 @@ MMS 的业务调用方分两大类——**前台用户**与**后台运营**（�
 
 **运行时**：`mms_event_loop_lag_seconds`、`mms_db_pool_connections{pool,state}`。
 
+**记忆质量指标（需求 §6.1，持续采集、周度评审）**：
+
+| 指标 | 口径（分子 / 分母） | 目标★ | 指标名 |
+|---|---|---|---|
+| 记忆采纳率 | usage 回报"实际用了"的记忆次数 / 有结果的检索次数 | ≥25%（首季建基线后修订） | `mms_memory_adoption_ratio` |
+| 负反馈率 | (INCORRECT + OUTDATED) 反馈数 / 被采纳数 | ≤2%（7 天窗口） | `mms_negative_feedback_ratio` |
+| 有害错误率 | 人工确认为高风险事实错误的被采纳记忆 / 被采纳数 | ≤0.5%，破线立即电话值班 | `mms_harmful_memory_ratio` |
+| 零结果率 | 空手而归的检索 / 全部检索（剔除入库 <24h 新客户） | ≤10% | 由 `mms_retrieval_zero_results_total` 计算 |
+| 陈旧残留率 | 抽样中"该被替换或过期、却还在用" / 抽样在用记忆 | ≤2% | Convergence BUSINESS 抽样 + 人工标注（见 Convergence 9.4） |
+| 跨客户命中 | A 的检索出现 B 的记忆 | =0 | `mms_cross_customer_hits_total` |
+
+> 抽取精确率/召回率、决策准确率、换说法/跨语言命中率属离线评测（需求 §6.2），由 7.7 评测端点承载，不在在线指标里。
+
 **SLO 与告警**：
 
 | SLI | 目标 | 告警 |
@@ -398,11 +412,25 @@ MMS 的业务调用方分两大类——**前台用户**与**后台运营**（�
 | 查询可用性 | 99.9%/30d | `MMSAvailabilitySLOBreach` |
 | 默认档延迟 | P95 ≤300ms / P99 ≤800ms | `MMSDefaultLatencySLOBreach` |
 | 扩展档延迟 | P95 ≤500ms / P99 ≤1500ms | `MMSExtendedLatencySLOBreach` |
+| 同步决策延迟（candidates / feedback 纠正 / review 批准） | P95 ≤500ms / P99 ≤1500ms | `MMSDecisionLatencySLOBreach` |
+| 异步受理延迟（extractions / ingestion events） | P95 ≤100ms / P99 ≤300ms | `MMSAcceptLatencySLOBreach` |
+| 反馈（非纠正）/ 删除受理 / 状态查询延迟 | P95 ≤200ms / P99 ≤500ms | `MMSFeedbackLatencySLOBreach` |
+| 管理面列表 / 溯源 / 审计读延迟 | P95 ≤1s / P99 ≤3s | `MMSAdminLatencySLOBreach` |
 | 降级率 | <1%（告警 >2%） | `MMSDegradedRatioHigh` |
 | 跨客户命中 | 0 | `MMSCrossCustomerHit`（page） |
 | 配额 429 激增 | 5m ≤20 | `MMSQuotaRejections` |
 | 同意快照缺失/版本落后 | 0 | `MMSConsentCheckUnavailable` / `MMSConsentVersionStale` |
 | 审计写失败 | 0 | `MMSAuditGuardFailure`（page） |
+| 同步写入 → 可被查 | P95 ≤10s / P99 ≤60s | `MMSWriteFreshnessSLOBreach`（ticket，需求 §7） |
+| 用户纠正 → 可被查 | P95 ≤30s / P99 ≤120s | `MMSCorrectionFreshnessSLOBreach`（page，需求 §7） |
+| 删除批准 → 执行完成 | ≤7 天 | `MMSDeletionDeadlineBreach`（page，需求 §7） |
+| 审核队列积压 | ≤200 条 | `MMSReviewQueueOverflow`（ticket，需求 §7） |
+| 有害错误率 | >0.5% | `MMSHarmfulMemoryRate`（page，需求 §7） |
+| 负反馈率 | >2%（7 天窗口） | `MMSNegativeFeedbackHigh`（ticket，需求 §7） |
+| 采纳率周环比 | 跌 >30% | `MMSAdoptionDrop`（ticket，需求 §7） |
+| 换说法/跨语言评测破线 | 任一指标不达标 | `MMSEvalGateBreach`（阻断启用，非运行时告警，需求 §7） |
+
+> 延迟四档与新鲜度目标均为需求 §5 的硬承诺；新鲜度 SLI 由 API 登记时刻与 Worker 产物 READY 时刻联合计算（Worker 侧导出老化指标，见 Worker 文档）。
 
 **Trace/日志**：OTel Web 框架埋点 + Langfuse `retrieval_observation`（检索全链路）+ `X-Request-ID` 回显；业务 trace_id 同时是 Langfuse/OTel trace id，供后续 feedback 精确打分；日志只落 `customer_hash` 不落正文。
 
@@ -410,22 +438,22 @@ MMS 的业务调用方分两大类——**前台用户**与**后台运营**（�
 
 ## 十一、API 与 Worker/Convergence 的边界
 
-Worker 与 Convergence 的完整设计见[《2-Worker组件设计》](2-Worker组件设计.md)与[《3-Convergence组件设计》](3-Convergence组件设计.md)。
+Worker 与 Convergence 的完整设计见[《2-Worker组件设计》](3-Worker组件设计.md)与[《3-Convergence组件设计》](4-Convergence组件设计.md)。
 
 | 维度 | API（本文） | Worker | Convergence |
 |---|---|---|---|
 | 实例 | 无状态多副本 | 多实例并行（`SKIP LOCKED`） | 单实例（advisory lock 主备） |
-| 触发 | 请求驱动 | 任务驱动（轮询队列） | 定时轮询全库 |
+| 触发 | 请求驱动 | 任务驱动（轮询队列） | 定时轮询到期状态（到期索引 + 分片轮转） |
 | DB 账号 | `mms_app`（向量表只读） | `mms_worker` | `mms_worker`（+deletion 提权） |
-| 是否调外部 provider | 是：查询向量/rerank（受同意闸） | 是：文档向量/翻译/事件外发 | 基本不调（canary 例外） |
-| 典型产物 | 在线响应、决策事务、Job/Outbox 登记 | READY 向量、译文视图、已发布事件 | 状态推进、回队、删除补偿 |
+| 是否调外部 provider | 是：查询向量/rerank（受同意闸） | 是：提取/文档向量/事件外发/画像合成（v1.5） | 基本不调（自检探针例外） |
+| 典型产物 | 在线响应、决策事务、Job/Outbox 登记 | READY 向量、已发布事件、客户画像（v1.5） | 状态推进、回队、删除补偿 |
 | 关系 | **把请求变成事务与任务** | **把任务消费掉** | **把卡住的任务放回队列 / 作废任务** |
 
 衔接点：
 
-- **同一事务边界**：API 决策事务内登记 embedding/translation Job 与 Outbox，Worker 随后消费——业务写成功 = 任务一定入队；
+- **同一事务边界**：API 决策事务内登记 embedding Job（及 v1.5 profile Job）与 Outbox，Worker 随后消费——业务写成功 = 任务一定入队；
 - **运维入口在 API，执行体在后台**：DLQ 重放、手动对账、视图成本触发、向量重建都是 API 端点，但只回队/登记，实际执行归 Worker/Convergence；
 - **屏障广播**：API 写路径与 Convergence 收尾都发 `pg_notify('mms_barrier_changed')`，每个 API 副本的 LISTEN 线程即时失效本地缓存（5s TTL 兜底）；
-- **删除接力**：API 受理（屏障 ACTIVE）→ 审核批准执行（同事务）→ Convergence 收尾（COOLING_DOWN→COMPLETED、墓碑清理）。
+- **删除接力**：API 受理（屏障 ACTIVE）→ 批准（客户自助自动批准 / 运营发起 4-eyes）→ 执行（同事务）→ Convergence 收尾（COOLING_DOWN→COMPLETED、墓碑清理）；批准 → 完成 ≤7 天。
 
 ---
