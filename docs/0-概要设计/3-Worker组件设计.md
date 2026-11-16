@@ -8,9 +8,9 @@
 
 > `mms-worker`：Kafka consumer group（可选）+ DB Job Worker；负责**提取、决策、语义标准化、视图生成、Embedding、生命周期、画像合成（v1.5）**。
 
-### 1.1 部署形态：物理部署单元，单进程四 Job（Profile 为 v1.5）
+### 1.1 部署形态：物理部署单元，默认单进程四 Job（Profile 为 v1.5）
 
-`mms-worker` 是一个**物理部署单元**：**只有一个进程**，进程内包含**四个 Job**，分别消费四张不同的队列表（v1 实际运行前三个，Profile Job 于 v1.5 启用）：
+`mms-worker` 是一个**物理部署单元**：默认**一个进程**内含**四个 Job**，分别消费四张不同的队列表（v1 实际运行前三个，Profile Job 于 v1.5 启用）。**可按命令拆分为 `worker-ingest`（Ingestion，LLM 密集）与 `worker-project`（Embedding/Outbox/Profile）两个部署单元独立扩容**——同一镜像、同一队列底座，拆分不改变语义：
 
 | Job | 队列表 | 职责 |
 |---|---|---|
@@ -19,8 +19,8 @@
 | Outbox Job | `memory_outbox_event` | 领域事件可靠外发 |
 | Profile Job（v1.5） | `memory_profile_job` | 由事实/偏好/情景合成客户画像（派生投影，可重建） |
 
-- 与 `mms-api`、`mms-convergence` 同一代码库、同一镜像，按不同命令启动为不同部署单元（见[《1-总体架构》](1-总体架构.md) 2.1.1）；
-- **水平扩容 = 部署多个 `mms-worker` 实例**：实例间靠 `FOR UPDATE SKIP LOCKED` 行级互斥，天然并行、不重复消费（见 4.2）；四个 Job 共享进程资源，扩容粒度是整个部署单元，不按单队列独立扩容；
+- 与 `mms-api`、`mms-convergence` 同一代码库、同一镜像，按不同命令启动为不同部署单元（见[《1-总体架构》](1-总体架构.md) 1.1.1）；
+- **水平扩容 = 部署多个实例**：实例间靠 `FOR UPDATE SKIP LOCKED` 行级互斥，天然并行、不重复消费（见 4.2）；默认单进程共享资源，LLM 密集摄取与毫秒级投影的资源画像分化时按 worker-ingest / worker-project 拆分独立扩容（见 4.7）；
 - 四个 Job 共享同一套队列底座（第二章）与共性执行骨架（第四章），各自的差异在第五~八章独立阐述；
 - **不建文档侧翻译链路（需求 §6.2 已决）**：跨语言召回由多语言向量模型承担，不翻译、不存储记忆译文；跨语言命中率不达标时以查询侧翻译兜底（检索编排内的可选步骤，见 API/总体架构，不属于 Worker 队列）。
 
@@ -48,20 +48,20 @@
 | 阶段 | 步骤 | 关键步骤 | 承载 Job | 执行机制 | 细节文档 |
 |---|---|---|---|---|---|
 | 受理 | S1 | 事件受理入队 | API 受理侧 → Ingestion Job | 授权/屏障前置闸；Inbox/Job 双账本同事务写入（事务①，返回 202）；入站统一 HTTP，Kafka 语义（topic/partition/offset/consumer_group，可选）由投递方作为信封元数据传入，消费幂等由 Inbox 账本承担 | [Ingestion Job设计](../1-核心流程/1-Ingestion%20Job设计.md) §五 |
-| 摄取主链 | S2 | 候选提取 | Ingestion Job | 会话/工单/CRM 原文 → **带类型**原子候选（单值事实 / 多值偏好 / 情景记录；LLM 提取；投递方已提取则跳过本步）；路径 A 为会话级 Job，逐候选准备+决策 | [Ingestion Job设计](../1-核心流程/1-Ingestion%20Job设计.md) §六、§二十二、[《04-从会话抽取候选记忆》](../2-详细设计/04-记忆抽取.md) |
-| 摄取主链 | S3 | 语义标准化 | Ingestion Job | 归一化产出 `object_json / semantic_text / semantic_hash / normalization_version` 与候选指纹 | [Ingestion Job设计](../1-核心流程/1-Ingestion%20Job设计.md) §七 |
-| 摄取主链 | S4 | 准入门禁 | Ingestion Job | 硬规则 + 价值评分 + **风险分级（高风险 / 低危）**；REJECTED/IGNORE 终态记审计，NEEDS_VERIFICATION **仅高风险**转审核 | [《05-记忆准入（硬规则+评分）》](../2-详细设计/06-记忆准入判定.md) |
-| 摄取主链 | S5 | 判重与决策 | Ingestion Job | **按类型分流**：单值事实走精确 + 语义判重，两段式决策（发现阶段事务外 + 权威判定业务事务内，含 consent 权威判定与提交前复核）→ ADD/NOOP/REINFORCE/SUPERSEDE/CONFLICT；偏好按新旧与观察强度自动取舍；情景仅按候选指纹精确去重、不做语义判重、不判冲突；**仅高风险** CONFLICT/NEEDS_VERIFICATION 转人工，低危自动定；与在线同步写路径共用同一实现 | [Ingestion Job设计](../1-核心流程/1-Ingestion%20Job设计.md) §九 |
-| 摄取主链 | S6 | 业务写入（视图生成） | Ingestion Job | 事务②：记忆 + 证据 + 决策 + current（仅单值事实）+ ORIGINAL/CANONICAL 视图原子提交；情景只追加、无 current；高风险 CONFLICT 转裁决、DELETE_REQUESTED 转删除链路 | [Ingestion Job设计](../1-核心流程/1-Ingestion%20Job设计.md) §十、[《07-记忆写入与更新》](../2-详细设计/08-记忆新增与更新.md) |
-| 摄取主链 | S7 | 下游任务登记 | Ingestion Job | 事务②内：embedding Job（ORIGINAL/CANONICAL，10/100）+ profile Job（来源变更触发，v1.5，500）+ Outbox 事件行 | [Ingestion Job设计](../1-核心流程/1-Ingestion%20Job设计.md) §十一 |
+| 摄取主链 | S2 | 候选提取 | Ingestion Job | 会话/工单/CRM 原文 → **带类型**原子候选（单值事实 / 多值偏好 / 情景记录；LLM 提取；投递方已提取则跳过本步），**FACT 候选附断言来源分级（权威事件 / 客户明确陈述 / 推断）与引证**；路径 A 为会话级 Job，逐候选准备+决策 | [Ingestion Job设计](../1-核心流程/1-Ingestion%20Job设计.md) §六、§二十二、[《04-从会话抽取候选记忆》](../2-详细设计/04-记忆抽取.md) |
+| 摄取主链 | S3 | 语义标准化 | Ingestion Job / API 同步路径 | **两层归一**：结构化事实（已注册 fact_key + 槽位）由 **MMS 确定性模板渲染**规范句（纯规则、<1ms、同步路径内联，版本=注册表 normalization_version）；自由文本由 LLM 归一（异步）。产出 `object_json / semantic_text / semantic_hash / normalization_version` 与候选指纹；调用方自带的 FACT semantic_text 忽略，以 MMS 版本为准；fact_key 经注册表解析（别名→规范键），未注册键转异步并生成键提案建议（DRAFT） | [Ingestion Job设计](../1-核心流程/1-Ingestion%20Job设计.md) §七 |
+| 摄取主链 | S4 | 准入门禁 | Ingestion Job | 硬规则 + 价值评分 + **风险分级（高风险 / 低危）** + **断言来源硬规则（FACT+CUSTOMER_EXPLICIT 缺引证降级 INFERRED；FACT+INFERRED 不进事实槽，转 EPISODIC 或 IGNORE）**；REJECTED/IGNORE 终态记审计，NEEDS_VERIFICATION **仅高风险**转审核 | [《06-记忆准入判定》](../2-详细设计/06-记忆准入判定.md) |
+| 摄取主链 | S5 | 判重与决策 | Ingestion Job | **按类型分流**：单值事实走精确 + 语义判重，两段式决策（发现阶段事务外 + 权威判定业务事务内，含 consent 权威判定与提交前复核）→ ADD/NOOP/REINFORCE/SUPERSEDE/CONFLICT，**事实 SUPERSEDE 仅接受权威事件/客户明确纠正（断言来源门控，见 5.1）**；偏好强度**增量维护**：REINFORCE 时 `strength ← strength·exp(-Δt/τ)+1`（τ 默认 30 天★，与 Σ 定义等价）、刷新 last_observed_at/observation_count，并把 `decay_check_at` 排到**预测退场时刻** `t + max(τ·ln(strength/θ), exit_idle_days)`，无周期复查（退场见 Convergence #16）；NOOP 为同指纹重复投递，幂等 noop；情景仅按候选指纹精确去重、不做语义判重、不判冲突；**仅高风险** CONFLICT/NEEDS_VERIFICATION 转人工，低危自动定；与在线同步写路径共用同一实现 | [Ingestion Job设计](../1-核心流程/1-Ingestion%20Job设计.md) §九 |
+| 摄取主链 | S6 | 业务写入（视图生成） | Ingestion Job | 事务②：记忆 + 证据 + 决策 + current（仅单值事实）+ ORIGINAL/CANONICAL 视图原子提交；**证据追加受 `evidence_max_per_memory`（默认 32★）封顶：超限同事务压缩（保留首条 + 最近 K/2 + 中段等距抽样），观察总数累计在记忆行 observation_count，逐次审计由决策表承担**；情景只追加、无 current；高风险 CONFLICT 转裁决、DELETE_REQUESTED 转删除链路 | [Ingestion Job设计](../1-核心流程/1-Ingestion%20Job设计.md) §十、[《08-记忆新增与更新》](../2-详细设计/08-记忆新增与更新.md) |
+| 摄取主链 | S7 | 下游任务登记 | Ingestion Job | 事务②内：embedding Job（ORIGINAL/CANONICAL，10/100；**仅目标态为 ACTIVE 的记忆登记——CONFLICTED 隔离期不算向量，裁决转 ACTIVE 时再登记**）+ profile Job（来源变更触发，v1.5，500）+ Outbox 事件行 | [Ingestion Job设计](../1-核心流程/1-Ingestion%20Job设计.md) §十一 |
 | 向量投影 | S8 | 外呼前闸门 | Embedding Job | 同意闸（`CROSS_BORDER_EMBEDDING`，按注册表 provider 判定跨境，缺行 fail-closed 视为外部）+ 新鲜度闸（屏障/代际/hash/生命周期），fail-closed；不合规直接 CANCELLED，不烧重试次数 | [Embedding Job设计](../1-核心流程/2-Embedding%20Job设计.md) §五、本文第十章 |
-| 向量投影 | S9 | 批量向量化 | Embedding Job | 读视图文本（`view_text_hash` + READY 锚点）+ 产物幂等回读（已写成免外呼）→ 按 `(model, version)` 分组批量调 provider，一组一次外呼 | [Embedding Job设计](../1-核心流程/2-Embedding%20Job设计.md) §六 |
+| 向量投影 | S9 | 批量向量化 | Embedding Job | 读视图文本（`view_text_hash` + READY 锚点）+ 产物幂等回读（已写成免外呼）→ 按 `(model, version)` 分组批量调 provider，一组一次外呼；**一次外呼产出 dense + sparse 双输出，写入同一向量行**（词法通道用 sparse，替代 trigram） | [Embedding Job设计](../1-核心流程/2-Embedding%20Job设计.md) §六 |
 | 向量投影 | S10 | 向量校验与终写 | Embedding Job | 注册表校验（维度/有限性/L2 范数），非法向量绝不落库；终写短事务：屏障再校验 + 归属校验 + 代际·双 hash 围栏，条件写入 READY 向量、Job 同事务置 READY | [Embedding Job设计](../1-核心流程/2-Embedding%20Job设计.md) §七 |
 | 事件外发 | S11 | 事件产生（Outbox 写入协议） | 业务事务（决策/删除/审核/consent）→ Outbox Job | 业务事务内 9 类触发点写 PENDING 事件行：身份解析生成 customer_ref、`idempotency_key` 去重、`barrier_generation` 快照、`event_id` 生成；与业务表原子提交 | [OutboxEvent机制设计](../1-核心流程/4-OutboxEvent机制设计.md) §4.1 |
 | 事件外发 | S12 | 屏障闸 | Outbox Job | 独立短事务，与写入同口径：删除域事件豁免（屏障通知本身必须发出去）、身份反查、代际/cutover 校验，fail-closed；阻塞 → RETRY 延迟 30s，旧代际/未知身份 → FAILED | [OutboxEvent机制设计](../1-核心流程/4-OutboxEvent机制设计.md) §4.3、本文 10.2 |
 | 事件外发 | S13 | 信封校验与外发（含完成态回写） | Outbox Job | 统一事件契约（event-envelope）校验 → transport（HTTP/本地日志，Kafka 可选）事务外外发 → `locked_by` 围栏回写 PUBLISHED（row_gone 不计成功）；异常退避 RETRY，试满 5 次 FAILED | [OutboxEvent机制设计](../1-核心流程/4-OutboxEvent机制设计.md) §4.3–4.5 |
 | 横切治理 | S14 | 生命周期执行侧校验 | 各 Job + 删除/决策事务 | 屏障/代际/生命周期状态写前校验，不合规任务 CANCELLED；扫描收敛归 Convergence | 各 Job 文档"删除协同"节、本文第十一章 |
-| 横切治理 | S15 | 重标准化（RENORMALIZE） | Convergence 触发 + Worker 执行 | normalizer 版本升级时原地重算规范化列、置 STALE 重建 CANONICAL 视图；不新建版本、不写决策，重建向量以 BACKFILL 优先级执行；源文本变化同时触发画像重算（v1.5） | [《05-记忆标准化》](../2-详细设计/05-记忆语义标准化.md) 9.2.5 |
+| 横切治理 | S15 | 重标准化（RENORMALIZE） | Convergence 触发 + Worker 执行 | normalizer 版本升级时原地重算规范化列、置 STALE 重建 CANONICAL 视图；不新建版本、不写决策，重建向量以 BACKFILL 优先级执行；源文本变化同时触发画像重算（v1.5） | [《05-记忆语义标准化》](../2-详细设计/05-记忆语义标准化.md) |
 | 画像投影 | S16 | 画像合成（v1.5） | Profile Job | 来源记忆（事实/偏好/情景）变更在业务事务内登记；外呼前过屏障/代际/同意闸 → 自托管 LLM 合成滚动摘要 → 终写短事务写客户画像；BACKFILL 优先级；可重建、绝不回写事实 | 本文第八章 |
 
 > 上述每一步都被共性执行骨架"**捞任务 → 前置检查 → 干活 → 复查并写结果 → 失败等待重试**"包裹（第四章）；失败重试、死信重放、对账回收等共性机制见第四、十、十一章，矩阵不再重复。
@@ -82,9 +82,9 @@ flowchart TD
 
     subgraph ING["Ingestion Job —— 事实生产（必须最先）"]
         S2["S2 候选提取<br/>原文 → 带类型候选（事实/偏好/情景，投递方已提取则跳过）<br/>路径 A 会话级 Job，逐候选准备+决策"]
-        S3["S3 语义标准化<br/>semantic_text / semantic_hash / normalization_version"]
-        S4["S4 准入门禁<br/>硬规则 + 价值评分 + 风险分级"]
-        S5["S5 判重与决策（按类型分流）<br/>事实：精确 + 语义判重 · 两段式决策<br/>偏好：自动取舍 · 情景：仅精确去重不判冲突"]
+        S3["S3 语义标准化（两层）<br/>结构化事实：确定性模板 · 自由文本：LLM<br/>semantic_text / semantic_hash / normalization_version"]
+        S4["S4 准入门禁<br/>硬规则 + 价值评分 + 风险分级 + 断言来源硬规则"]
+        S5["S5 判重与决策（按类型分流）<br/>事实：精确 + 语义判重 · 仅权威/明确纠正可换新值<br/>偏好：自动取舍（强度增量维护）· 情景：仅精确去重不判冲突"]
         RJ["终态审计，不写入"]
         CF["冲突裁决 / 人工审核"]
         DEL["删除链路（屏障 + 失效）"]
@@ -264,11 +264,18 @@ stateDiagram-v2
 | 参数 | 值 | 说明 |
 |---|---|---|
 | `worker_poll_seconds` | 1.0 | 四个 Job 共用的空闲轮询间隔 |
-| `max_views_per_memory` | 6 | 每记忆视图数安全上限（ORIGINAL 按证据语言 + CANONICAL；不建译文视图，见 10.5） |
+| `ingestion_llm_timeout_seconds` | 30 | 提取 LLM 外呼超时（租约 60s ≥ 2× 此值，见 4.7） |
+| `max_views_per_memory` | 2 | 每记忆视图预算：ORIGINAL（主证据语言）+ CANONICAL 各 1，与需求 §4.1 双视图推算（2 亿行/1TB）一致；不建译文视图、不为次要证据语言另建视图（见 10.5） |
 
 各 Job 专属参数见其章节的"配置与观测"节。**租约时长必须明显大于单个任务的最长处理时间**（含外部调用），否则还在干活的任务会被误判成"实例崩溃"而被别人接手，造成重复处理。
 
 **队列维护与迁移警报线（需求 §4.2）**：队列表要频繁回收空间（autovacuum 调优）+ 给未完成任务建专用部分索引；**最老未处理任务 >5min 持续 10min，或队列表空间膨胀 >20%**，触发"队列搬出数据库"预案。
+
+### 4.7 并发模型与容量核算
+
+- **asyncio 事件循环 + 每 Job 并发信号量**：Ingestion 默认 8 路/实例（LLM 密集）、Embedding 4 批/实例、Outbox 8 路/实例、Profile 2 路/实例（v1.5）；外呼全部异步，不阻塞事件循环；
+- **租约 ≥ 2×P99 单任务处理时间**：Ingestion 租约 60s 对应提取 LLM 超时 30s（`ingestion_llm_timeout_seconds`）；Embedding 租约 60s 对应向量化超时 10s；Profile 租约 120s 对应合成超时 60s——租约必须覆盖"超时 + 幂等回读 + 终写"，否则还在干活的任务会被误接手；
+- **容量核算（峰值口径）**：峰值 ~17 会话/s（15 万会话/日 × 10 峰谷比）× 提取 ~3s ≈ 51 路并发 → 按 8 路/实例需 ≥7 个摄取实例（或等量拆分部署）；Embedding 峰值 ~50 决策/s × 2 视图 ÷ 批 16 ≈ 7 批/s，单实例 4 批并发留余量即可，BACKFILL 重建另核（见 6.4）。实例数为规划值，上线前压测校准。
 
 ---
 
@@ -281,10 +288,15 @@ stateDiagram-v2
 - **接收侧（API 受理）**：屏障前置 + Inbox/Job 双账本同事务写入（投递幂等）；
 - **消费侧**：提取（带类型候选）→ 语义标准化 → 准入门禁（硬规则 + 价值评分 + 风险分级）→ 按类型分流决策（事实：判重 + 冲突检测；偏好：自动取舍；情景：仅精确去重）→ 视图生成 → 写库 → 同事务登记下游 Job 与 Outbox；
 - **风险分级（需求 §2.2/§3.1）**：只有高风险事实（金额/承诺/合规）产生 NEEDS_VERIFICATION 或将 CONFLICT 转人工；低危按"越近、观察次数越多越可信"自动定，错了走纠正链路——人工审核量与写入总量解耦（每日新增 ≤200 条）；
+- **断言来源门控（需求 §2.1①）**：事实换新值只接受权威事件或客户明确纠正（带引证）；推断出的"事实"转情景或 IGNORE；来源层级 权威 > 明确纠正 > 推断，同层级按新旧/观察强度，跨来源系统按 policy 信任层级——低信任 agent 的抽取不能覆盖高信任来源的当前值；
+- **同意快照缺失分账**：候选决策时快照缺失/不可用 → RETRY 有界退避（TTL 24h★，等快照同步到达），超 TTL 才终态 REJECTED（CONSENT_MISSING_TIMEOUT）；明确 DENIED/WITHDRAWN → 终态 REJECTED 不进 DLQ——fail-closed 不变，但新客户首会话不因同步竞态被永久烧掉（见 API 第八章）；
+- **偏好强度与证据治理**：强度在决策事务内 O(1) 增量维护（与 Σ exp(-Δt/τ) 定义等价），读取/排序时现算有效强度；退场时刻在观察时精确预测，Convergence 只做一次到点判定；证据按 K 封顶采样压缩，只作引证不参与强度计算（见 Convergence #16）；
+- **配额感知淘汰**：存量接近上限（≥95%）时在决策事务内淘汰最弱偏好（**按现算有效强度 `strength·exp(-(now−last_observed_at)/τ)` 排序**）/最老情景（事实当前值永不淘汰），与在线同步写共用同一实现（见 API 6.3）；
+- **回源核对（高风险事实）**：触发以**检索命中到期为主**（API 7.1 读路径登记）、Convergence #17 低频兜底扫描为辅（登记后刷新 +90 天★），共用每日核对预算闸（`fact_verify_daily_budget`，默认 20 万★）；Worker 以对业务系统的服务身份回源取权威值，作为权威候选（assertion_source=AUTHORITATIVE_EVENT）走同一决策链（SUPERSEDE/NOOP/CONFLICT）——把核对量对准"在用事实"，收敛陈旧残留率（需求 §6.1）；
 - **两段式决策**：发现阶段（事务外）+ 权威判定（业务事务内），与在线同步写路径共用同一实现；
-- **语义标准化**产出 `object_json / semantic_text / semantic_hash / normalization_version`；
+- **语义标准化（两层）**：结构化事实由确定性模板内联渲染（同步/异步同一实现、同一版本），自由文本 LLM 归一产出 `object_json / semantic_text / semantic_hash / normalization_version`（规范句语言=客户主语言）；模板版本升级由 RENORMALIZE 确定性重渲染存量，无需 LLM；
 - **视图生成**：业务事务内写 ORIGINAL/CANONICAL（不建译文视图，跨语言召回由多语言向量模型承担）；来源记忆变更同事务登记 profile Job（v1.5，见第八章）；
-- **Kafka consumer（入站，可选）**：入站统一 HTTP 摄取；Kafka 语义（topic/partition/offset/consumer_group）由外部投递方作为信封元数据传入，消费幂等由 Inbox 账本承担。
+- **入站 transport（v1 统一 HTTP）**：Kafka 语义（topic/partition/offset/consumer_group）仅由投递方作为信封元数据传入（供幂等与追溯），v1 不运行 Kafka consumer；Kafka 直连消费为可选演进（见总体架构部署图），消费幂等由 Inbox 账本承担。
 
 ### 5.2 状态机与执行特性
 
@@ -313,7 +325,7 @@ stateDiagram-v2
 | `ingestion_lease_seconds` / `ingestion_max_attempts` | 60 / 5 | 摄取租约与重试上限 |
 | `inbox_stale_seconds` / `inbox_retention_days` | 360 / 7 | Inbox 陈旧阈值（退避上限+一个租约）与保留期 |
 
-**核心指标**：`mms_ingestion_jobs_total{status}`、`mms_inbox_duplicate_total`、`mms_inbox_stale_total`、`mms_ingestion_job_oldest_age_seconds`。
+**核心指标**：`mms_ingestion_jobs_total{status}`、`mms_inbox_duplicate_total`、`mms_inbox_stale_total`、`mms_ingestion_job_oldest_age_seconds`、`mms_evidence_compacted_total`（证据压缩行数）。
 
 **新鲜度 SLO / 告警**：纠正 → 可被查 P95 ≤30s / P99 ≤120s（`MMSCorrectionFreshnessSLOBreach`，page）；会话提取 → 可被查 P95 ≤5min / P99 ≤15min（需求 §5.2）；最老任务 >300s 持续 10m → `MMSIngestionQueueAge`；Inbox 异常 → `MMSInboxAnomaly` / `MMSInboxStale`。
 
@@ -349,6 +361,7 @@ stateDiagram-v2
 
 - **活动唯一键不含文本 hash**：按 `(memory_id, model, version, view_kind, view_language, operation)` 仅对活动态唯一。文本变化时**就地改写**那条活动 Job（`generation+1`、重置 attempts、取更高优先级），不并存两条——否则旧向量可能覆盖新向量；
 - **终写代际 + 双 hash 围栏**：终写要求 Job 携带的 `generation` 与视图当前代际一致，并叠加 `content_hash`/`view_text_hash` 双 hash 匹配（共性屏障围栏见第九章，完整推导见 [Embedding Job设计](../1-核心流程/2-Embedding%20Job设计.md) §十三）。
+- **登记条件**：Embedding Job 只为 ACTIVE（或即将 ACTIVE）的记忆登记；CONFLICTED/历史态不登记，对账亦不回填（向量保留集 = ACTIVE，见 Convergence 9.2）。
 
 **向量操作（operation）枚举**：
 
@@ -368,7 +381,7 @@ provider 外呼超时 10s（见 10.5）。
 
 **核心指标**：`mms_embedding_jobs_total{status,model,version}`、`mms_embedding_failures_total`、`mms_embedding_invalid_vector_total`、`mms_embedding_job_lease_expired_total`、`mms_embedding_job_oldest_age_seconds{priority_band}`、`mms_embedding_ready_age_seconds`、`mms_embedding_cross_border_blocked_total`。
 
-**新鲜度 SLO / 告警**：同步写入 → 可被查 P95 ≤10s / P99 ≤60s（`MMSWriteFreshnessSLOBreach`，ticket，需求 §5.2/§7）；最老 PENDING >5min 告警；租约回收增长 → `MMSEmbeddingLeaseExpiryGrowing`；模型升级 → 全量重建完成 ≤7 天★（BACKFILL 优先级，需求 §5.2）。
+**新鲜度 SLO / 告警**：同步写入 → 可被查 P95 ≤10s / P99 ≤60s（`MMSWriteFreshnessSLOBreach`，ticket，需求 §5.2/§7）；最老 PENDING >5min 告警；租约回收增长 → `MMSEmbeddingLeaseExpiryGrowing`；模型升级 → 全量重建完成 ≤7 天★（BACKFILL 优先级，需求 §5.2；容量核算：2 亿向量 ÷ 7 天 ≈ 333 向量/s 持续吞吐，BACKFILL 让路下须预留对应 GPU 批量能力，上线前压测校准）。
 
 ---
 
@@ -413,17 +426,25 @@ provider 外呼超时 10s（见 10.5）。
 
 **新鲜度 SLO / 告警**：事件外发 → 下游收到 P95 ≤30s / P99 ≤120s（需求 §5.2）；最老事件 >120s 持续 5m → `MMSOutboxBacklog`；FAILED 存量 → `MMSOutboxFailed`。
 
+### 7.5 下游消费者契约（送达侧）
+
+- **消费者注册**：下游经管理面 `GET/POST /admin/outbox-consumers` 注册（endpoint + 服务凭证 + 订阅事件类型）；未注册的消费者不接收事件；
+- **送达语义**：transport=HTTP 推送至注册 endpoint，**至少一次投递 + 下游按 `idempotency_key` 去重**；消费者不可达按退避重试，试满 FAILED 入 DLQ；
+- **transport 边界**："本地日志"仅限开发/审计兜底，不作为生产送达通道；≤30s 送达 SLO 仅对 HTTP/Kafka transport 承诺（需求 §5.2）。
+- **顺序契约**：同客户事件**不保序**（重试与并行外发会乱序），跨客户无序；下游按信封 `barrier_generation` 单调判新旧（旧代际事件丢弃），配合 `idempotency_key` 去重——至少一次 + 代际判新，不依赖到达顺序。
+
 ---
 
 ## 八、Profile Job（`memory_profile_job`，v1.5）
 
-把事实/偏好/情景记忆异步合成为客户画像——**画像是派生投影：不手工录入、不允许直接修改、随时可从源头重建**。v1 不建此队列，但检索响应形状已预留画像字段（v1 恒空，见 API 文档 7.1）；v1.5 上线时调用方无需改代码。
+把事实/偏好/情景记忆异步合成为客户画像——**画像是派生投影：不手工录入、不允许直接修改、随时可从源头重建**。v1 不建此队列：画像字段由**确定性结构化摘要**填充（决策事务内维护，见 API 文档 7.1），不经本队列；v1.5 本队列上线 LLM 画像替换字段内容，调用方无需改代码。
 
 ### 8.1 职责与流程
 
-- **触发**：来源记忆（事实/偏好/情景）新增/变更/关闭时在业务事务内登记（与 embedding Job 登记同口径，见 S7）；Convergence 对账回填缺失/落后的画像（见第十一章）；
+- **触发（实质性变更）**：事实 SUPERSEDE / 偏好强度越阈 / 新情景入库时在业务事务内登记（与 embedding Job 登记同口径，见 S7）；NOOP/REINFORCE 不触发；每客户最小重算间隔 `profile_min_interval_hours`（默认 6★）内合并（活动唯一键就地改写天然削峰）；Convergence 对账回填缺失/落后的画像（见第十一章）；
 - **外呼前闸门**：屏障/代际/记忆状态/同意，fail-closed（口径同第十章）；**合成仅使用自托管 LLM（文本不出境）**，不新增跨境同意通道（需求固定 7 类同意）；
-- **合成**：读客户当前事实 + 最强偏好 + 近期情景，LLM 生成滚动摘要（1~N 段）；
+- **合成（增量 + 输出契约）**：旧画像 + 变更增量 → 新画像（全量重建仅用于修复/回填）；读客户当前事实 + 最强偏好 + 近期情景（输入 ≤`profile_max_chars`）；输出结构化三段（身份概况 / 稳定偏好 / 未决事项），≤`profile_max_output_chars`（默认 500★），**每条论断挂来源 memory_id**；
+- **忠实性门禁**：论断必须可由来源记忆推出；上线前过忠实性评测（纳入需求 §6.2 评测集扩展，受 §6.3 门禁）——画像幻觉会注入每次回答，属系统性有害错误风险；
 - **终写短事务**：屏障/归属/代际再校验 + 条件写画像 + Job 置 READY，原子提交；**画像绝不回写事实或证据**。
 
 ### 8.2 状态机与执行特性
@@ -452,6 +473,8 @@ provider 外呼超时 10s（见 10.5）。
 |---|---|---|
 | `profile_lease_seconds` / `profile_max_attempts` | 120 / 5 | 合成租约（LLM 外呼较慢，须明显大于最长处理时间）与重试上限 |
 | `profile_max_chars` | 8000 | 喂给合成的来源文本长度上限 |
+| `profile_min_interval_hours` | 6★ | 每客户最小重算间隔（间隔内合并，实质性变更才触发） |
+| `profile_max_output_chars` | 500★ | 画像输出长度上限（结构化三段，论断挂来源 memory_id） |
 
 **核心指标**：`mms_profile_jobs_total{status}`、`mms_profile_failures_total`、`mms_profile_ready_age_seconds`、`mms_profile_job_oldest_age_seconds`。
 
@@ -501,7 +524,6 @@ Worker 没有在线入口，不承担接口鉴权与入口限流（那是 API �
 | `VIEW_BUDGET_EXCEEDED` | 视图预算耗尽 |
 | `DELETE_REQUESTED` | 删除链路取消 |
 | `LIFECYCLE_CLOSED` | 生命周期扫描取消（记忆已关闭） |
-| `VIEW_EVICTED` | 视图成本淘汰取消 |
 
 ### 10.4 出站凭证与重放审计
 
@@ -515,7 +537,7 @@ Worker 的吞吐由**认领批量 + 轮询间隔 + 租约**自然节流，无入
 
 | 预算 | 口径 | 行为 |
 |---|---|---|
-| 视图预算 | 每记忆视图数上限 `min(进程配置, 策略上限)`（默认 6）；ORIGINAL 按证据语言 + CANONICAL，不建译文视图 | 超额视图不登记；终写再查一次，耗尽即取消 |
+| 视图预算 | 每记忆视图数上限 `min(进程配置, 策略上限)`（默认 2）；ORIGINAL（主证据语言）+ CANONICAL，不建译文视图、次要证据语言不另建视图（原文留在证据表可审计） | 超额视图不登记；终写再查一次，耗尽即取消 |
 | 客户级配额 | WRITE/EXTRACTION/EMBEDDING/存量（见 API 文档第六章） | 在 API 决策事务内判定；Worker 不重复扣减，只受屏障与新鲜度约束 |
 | provider 超时 | 向量化 10s、画像合成 60s（v1.5，自托管 LLM） | 超时按瞬时失败退避重试，不阻塞其他任务 |
 
@@ -546,6 +568,7 @@ Worker 的吞吐由**认领批量 + 轮询间隔 + 租约**自然节流，无入
 ## 十二、可观测性共性要求
 
 - **老化指标必须由 Worker 进程导出**（不能只靠 API 进程），确保积压能被及时发现；各队列的核心指标与告警见第五~八章各 Job 的"配置与观测"节；
+- **新鲜度 SLI 数据源**：决策事务写 `registered_at`（路径标签 sync/correction/extraction），Embedding 终写同事务写 `ready_at`；本进程导出 `ready_at - registered_at` 直方图（按路径分桶），供写入/纠正/提取三条新鲜度 SLI（见 API 文档第十章）。
 - **provider 外呼观测**：`mms_llm_requests_total{provider,model,operation,status}`、`mms_llm_request_duration_seconds`、`mms_llm_tokens_total` 统一覆盖提取/向量化/画像合成外呼；输入文本不落日志正文。
 
 ---
@@ -556,11 +579,11 @@ Worker 的吞吐由**认领批量 + 轮询间隔 + 租约**自然节流，无入
 
 **代价**：
 - 自研 claim/lease/退避/DLQ/对账；队列表与业务同库，积压竞争同一 PG 资源（靠 `SKIP LOCKED` + 部分索引 + 优先级缓解）；轮询固有延迟。
-- 四个 Job 同进程共享资源，扩容粒度是整个部署单元，无法按单队列独立扩容——换取部署与运维的简单。
+- 默认四 Job 同进程共享资源（部署与运维简单）；资源画像分化时可按 worker-ingest / worker-project 拆分独立扩容（见 1.1/4.7），拆分不改变队列语义。
 - 合规闸与预算校验在每次外呼前后重复执行，换来的是"文本出境前一刻仍然合法"的强保证——这是刻意付出的成本。
 
-**不建翻译链路的取舍（需求 §6.2 已决）**：跨语言召回交给多语言向量模型，省掉一整类翻译任务及其门控/预算/淘汰/对账机制；代价是词法通道只能匹配原文语言、小语种对召回质量依赖模型对齐——由跨语言命中率评测持续验证，不达标时以查询侧翻译兜底（只翻查询、不存译文）。
+**不建翻译链路的取舍（需求 §6.2 已决）**：跨语言召回交给多语言向量模型，省掉一整类翻译任务及其门控/预算/淘汰/对账机制；词法通道用模型 sparse 输出、天然跨语言（无需按语言配置），小语种召回质量依赖模型对齐——由跨语言命中率评测持续验证，不达标时以查询侧翻译兜底（只翻查询、不存译文）。
 
-**版本升级先过评测门禁（需求 §6.3）**：抽取器/归一器/向量模型/决策政策新版启用前，必须通过黄金评测集全部指标（影子评测覆盖整条决策链，不只挑战向量模型）；任一破线阻断启用（`MMSEvalGateBreach`，门禁执行见 API 文档 7.7）。**版本升级只影响投影、不改变事实**：embedding 模型升级走 `REBUILD` 回填、normalizer 升级走 `RENORMALIZE` 重标准化，均以 BACKFILL 优先级执行，不饿死在线链路；事实替代（SUPERSEDE）只由权威事件或用户明确纠正触发（见[《05-记忆标准化》](../2-详细设计/05-记忆语义标准化.md) 9.2.5、[《07-记忆写入与更新》](../2-详细设计/08-记忆新增与更新.md)）。
+**版本升级先过评测门禁（需求 §6.3）**：抽取器/归一器/向量模型/决策政策新版启用前，必须通过黄金评测集全部指标（影子评测覆盖整条决策链，不只挑战向量模型）；任一破线阻断启用（`MMSEvalGateBreach`，门禁执行见 API 文档 7.7）。**版本升级只影响投影、不改变事实**：embedding 模型升级走 `REBUILD` 回填、normalizer 升级走 `RENORMALIZE` 重标准化，均以 BACKFILL 优先级执行，不饿死在线链路；事实替代（SUPERSEDE）只由权威事件或用户明确纠正触发（见[《05-记忆语义标准化》](../2-详细设计/05-记忆语义标准化.md)、[《08-记忆新增与更新》](../2-详细设计/08-记忆新增与更新.md)）。
 
 ---
